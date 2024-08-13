@@ -34,6 +34,10 @@ class SparseAct():
                 if getattr(self, attr) is not None:
                     kwargs[attr] = f(getattr(self, attr), aux)
         return SparseAct(**kwargs)
+    
+    @property
+    def shape(self):
+        return self.act.shape#, self.res.shape
         
     def __mul__(self, other) -> 'SparseAct':
         if isinstance(other, SparseAct):

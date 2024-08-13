@@ -1,14 +1,16 @@
 #!/bin/bash
 
-DATA=$1
-NODE=$2
-EDGE=$3
-AGG=$4
-LENGTH=$5
-DICT_ID=$6
+# EleutherAI/pythia-70m-deduped
+MODEL=$1
+DATA=$2
+NODE=$3
+EDGE=$4
+AGG=$5
+LENGTH=$6
+DICT_ID=$7
 
 python circuit.py \
-    --model EleutherAI/pythia-70m-deduped \
+    --model $1 \
     --num_examples 100 \
     --batch_size 10 \
     --dataset $DATA \

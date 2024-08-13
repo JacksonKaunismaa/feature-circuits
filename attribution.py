@@ -79,7 +79,9 @@ def _pe_attrib(
     for submodule in submodules:
         patch_state, clean_state, grad = hidden_states_patch[submodule], hidden_states_clean[submodule], grads[submodule]
         delta = patch_state - clean_state.detach() if patch_state is not None else -clean_state.detach()
-        effect = delta @ grad
+        # print("delta", delta.shape, 'grad', grad.shape)
+        effect = delta @ grad  # this is just elementwise product for activations, and something weird for err
+        # print("effect for", submodule, effect.shape)  # for SAE errors
         effects[submodule] = effect
         deltas[submodule] = delta
         grads[submodule] = grad
@@ -343,24 +345,30 @@ def jvp(
         y_res = y - y_hat
         downstream_act = SparseAct(act=g, res=y_res).save()
 
-
         if isinstance(left_vec, SparseAct):
+            # left_vec is downstream grads (\nabla_d m)
+            # to backprop is (\nabl_d m) @ d (in eq 5)
             downstream_grads_times_acts = (left_vec @ downstream_act).to_tensor().flatten()
             def to_backprop(feat): 
                 return downstream_grads_times_acts[feat] # should be nabla_d metric @ d
         elif isinstance(left_vec, dict):
             def to_backprop(feat):
                 downstream_grads_via_feat = left_vec[feat]
+                # this is (\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) @ m_bar  (in eq 6)
                 downstream_grads_via_feat_times_acts = (downstream_grads_via_feat @ downstream_act)
                 # sum over downstream features
                 return downstream_grads_via_feat_times_acts.to_tensor().sum()
 
-
+        print(len(downstream_features))
         for downstream_feat in downstream_features:
-            vjv = (upstream_act.grad @ right_vec).to_tensor().flatten()
+            # or in eq 6: \nabla_u {(\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) * m_bar} 
+            #             * (u_patch - u_clean)
+            vjv = (upstream_act.grad @ right_vec).to_tensor().flatten()  # eq 5 is vjv
             if return_without_right:
                 vj = upstream_act.grad.to_tensor().flatten()
             x_res.grad = t.zeros_like(x_res)
+            # when doing eq 6, this indexes into an m_bar grad? downstream_feat corresponds to d
+
             to_backprop(downstream_feat).backward(retain_graph=True)
             
             vjv_indices[downstream_feat] = vjv.nonzero().squeeze(-1).save()
@@ -369,7 +377,6 @@ def jvp(
                 vj_indices[downstream_feat] = vj.nonzero().squeeze(-1).save()
                 vj_values[downstream_feat] = vj[vj_indices[downstream_feat]].save()
 
-        
     # construct return values
 
     ## get shapes
@@ -384,7 +391,8 @@ def jvp(
          t.cat([vjv_indices[downstream_feat].value for downstream_feat in downstream_features], dim=0)]
     ).to(model.device)
     vjv_values = t.cat([vjv_values[downstream_feat].value for downstream_feat in downstream_features], dim=0)
-
+    # print(vjv_values.shape, upstream_act.value.shape, d_downstream_contracted, d_upstream_contracted, d_upstream,
+        #   upstream_act.value.res.shape, upstream_act.value.act.shape)
     if not return_without_right:
         return t.sparse_coo_tensor(vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted))
     
