@@ -8,6 +8,7 @@ EDGE=$4
 AGG=$5
 LENGTH=$6
 DICT_ID=$7
+DATA_TYPE=$8
 
 python circuit.py \
     --model $1 \
@@ -18,4 +19,6 @@ python circuit.py \
 	--edge_threshold $EDGE \
 	--aggregation $AGG \
     --example_length $LENGTH \
-    --dict_id $DICT_ID
+    --dict_id $DICT_ID \
+    --data_type $DATA_TYPE
+    

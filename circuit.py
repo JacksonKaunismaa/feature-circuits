@@ -13,7 +13,7 @@ from activation_utils import SparseAct
 from attribution import patching_effect, jvp
 from circuit_plotting import plot_circuit, plot_circuit_posaligned
 from dictionary_learning import AutoEncoder
-from loading_utils import load_examples, load_examples_nopair
+from loading_utils import load_examples, load_examples_nopair, load_examples_hf
 from nnsight import LanguageModel
 
 
@@ -473,123 +473,7 @@ def get_circuit_cluster(dataset,
         save_dir=os.path.join(plot_dir, save_basename))
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', '-d', type=str, default='simple_train',
-                        help="A subject-verb agreement dataset in data/, or a path to a cluster .json.")
-    parser.add_argument('--num_examples', '-n', type=int, default=100,
-                        help="The number of examples from the --dataset over which to average indirect effects.")
-    parser.add_argument('--example_length', '-l', type=int, default=None,
-                        help="The max length (if using sum aggregation) or exact length (if not aggregating) of examples.")
-    parser.add_argument('--model', type=str, default='EleutherAI/pythia-70m-deduped',
-                        help="The Huggingface ID of the model you wish to test.")
-    parser.add_argument("--dict_path", type=str, default="dictionaries/pythia-70m-deduped/",
-                        help="Path to all dictionaries for your language model.")
-    parser.add_argument('--d_model', type=int, default=512,
-                        help="Hidden size of the language model.")
-    parser.add_argument('--dict_id', type=str, default=10,
-                        help="ID of the dictionaries. Use `id` to obtain circuits on neurons/heads directly.")
-    parser.add_argument('--dict_size', type=int, default=32768,
-                        help="The width of the dictionary encoder.")
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help="Number of examples to process at once when running circuit discovery.")
-    parser.add_argument('--aggregation', type=str, default='sum',
-                        help="Aggregation across token positions. Should be one of `sum` or `none`.")
-    parser.add_argument('--node_threshold', type=float, default=0.2,
-                        help="Indirect effect threshold for keeping circuit nodes.")
-    parser.add_argument('--edge_threshold', type=float, default=0.02,
-                        help="Indirect effect threshold for keeping edges.")
-    parser.add_argument('--pen_thickness', type=float, default=1,
-                        help="Scales the width of the edges in the circuit plot.")
-    parser.add_argument('--nopair', default=False, action="store_true",
-                        help="Use if your data does not contain contrastive (minimal) pairs.")
-    parser.add_argument('--plot_circuit', default=False, action='store_true',
-                        help="Plot the circuit after discovering it.")
-    parser.add_argument('--nodes_only', default=False, action='store_true',
-                        help="Only search for causally implicated features; do not draw edges.")
-    parser.add_argument('--plot_only', action="store_true",
-                        help="Do not run circuit discovery; just plot an existing circuit.")
-    parser.add_argument("--circuit_dir", type=str, default="circuits/",
-                        help="Directory to save/load circuits.")
-    parser.add_argument("--plot_dir", type=str, default="circuits/figures/",
-                        help="Directory to save figures.")
-    parser.add_argument('--seed', type=int, default=12)
-    parser.add_argument('--device', type=str, default='cuda:0')
-    args = parser.parse_args()
-
-
-    device = args.device
-
-    model = LanguageModel(args.model, device_map=device, dispatch=True)
-
-    if args.model != 'gpt2':
-        embed = model.gpt_neox.embed_in
-        attns = [layer.attention for layer in model.gpt_neox.layers]
-        mlps = [layer.mlp for layer in model.gpt_neox.layers]
-        resids = [layer for layer in model.gpt_neox.layers]
-    else:
-        embed = None   # embedding SAE doesn't exist for gpt2
-        attns = [layer.attn for layer in model.transformer.h]
-        mlps = [layer.mlp for layer in model.transformer.h]
-        resids = [layer for layer in model.transformer.h]
-
-    dictionaries = {}
-    if args.dict_id == 'id':
-        from dictionary_learning.dictionary import IdentityDict
-        dictionaries[embed] = IdentityDict(args.d_model)
-        for i in range(len(model.gpt_neox.layers)):
-            dictionaries[attns[i]] = IdentityDict(args.d_model)
-            dictionaries[mlps[i]] = IdentityDict(args.d_model)
-            dictionaries[resids[i]] = IdentityDict(args.d_model)
-    elif args.dict_id == 'gpt':
-        for i in range(len(model.transformer.h)):
-            dictionaries[attns[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-hook-z-kk",
-                f"blocks.{i}.hook_z",
-                device=device
-            )
-            dictionaries[mlps[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-mlp-tm",
-                f"blocks.{i}.hook_mlp_out",
-                device=device
-            )
-            dictionaries[resids[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-res-jb",
-                f"blocks.{i}.hook_resid_pre",
-                device=device
-            )
-
-    else:
-        dictionaries[embed] = AutoEncoder.from_pretrained(
-            f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
-            device=device
-        )
-        for i in range(len(model.gpt_neox.layers)):
-            dictionaries[attns[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-            dictionaries[mlps[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-            dictionaries[resids[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-        print(dictionaries.keys())
-    
-    if args.nopair:
-        save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
-        examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
-    else:
-        data_path = f"data/{args.dataset}.json"
-        save_basename = args.dataset
-        if args.aggregation == "sum":
-            examples = load_examples(data_path, args.num_examples, model, pad_to_length=args.example_length)
-        else:
-            examples = load_examples(data_path, args.num_examples, model, length=args.example_length)
-    
+def process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples):
     batch_size = args.batch_size
     num_examples = min([args.num_examples, len(examples)])
     n_batches = math.ceil(num_examples / batch_size)
@@ -604,7 +488,6 @@ if __name__ == '__main__':
         running_edges = None
 
         for batch in tqdm(batches, desc="Batches"):
-                
             clean_inputs = t.cat([e['clean_prefix'] for e in batch], dim=0).to(device)
             clean_answer_idxs = t.tensor([e['clean_answer'] for e in batch], dtype=t.long, device=device)
             if args.model == 'gpt2':
@@ -715,3 +598,139 @@ if __name__ == '__main__':
             annotations=annotations, 
             save_dir=f'{args.plot_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}'
         )
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', '-d', type=str, default='simple_train',
+                        help="A subject-verb agreement dataset in data/, or a path to a cluster .json.")
+    parser.add_argument('--num_examples', '-n', type=int, default=100,
+                        help="The number of examples from the --dataset over which to average indirect effects.")
+    parser.add_argument('--example_length', '-l', type=int, default=None,
+                        help="The max length (if using sum aggregation) or exact length (if not aggregating) of examples.")
+    parser.add_argument('--model', type=str, default='EleutherAI/pythia-70m-deduped',
+                        help="The Huggingface ID of the model you wish to test.")
+    parser.add_argument("--dict_path", type=str, default="dictionaries/pythia-70m-deduped/",
+                        help="Path to all dictionaries for your language model.")
+    parser.add_argument('--d_model', type=int, default=512,
+                        help="Hidden size of the language model.")
+    parser.add_argument('--dict_id', type=str, default=10,
+                        help="ID of the dictionaries. Use `id` to obtain circuits on neurons/heads directly.")
+    parser.add_argument('--dict_size', type=int, default=32768,
+                        help="The width of the dictionary encoder.")
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help="Number of examples to process at once when running circuit discovery.")
+    parser.add_argument('--aggregation', type=str, default='sum',
+                        help="Aggregation across token positions. Should be one of `sum` or `none`.")
+    parser.add_argument('--node_threshold', type=float, default=0.2,
+                        help="Indirect effect threshold for keeping circuit nodes.")
+    parser.add_argument('--edge_threshold', type=float, default=0.02,
+                        help="Indirect effect threshold for keeping edges.")
+    parser.add_argument('--pen_thickness', type=float, default=1,
+                        help="Scales the width of the edges in the circuit plot.")
+    
+    dtype_group = parser.add_argument_group('data-type') # Define a data-type argument that must be either nopair, regular, or hf
+    dtype_group.add_argument(
+        '--data-type',
+        type=str,
+        choices=['nopair', 'regular', 'hf'],
+        required=True,
+        default='regular',
+        help="Specify the data type. Must be either 'nopair', 'regular', or 'hf'."
+    )
+    
+    parser.add_argument('--plot_circuit', default=False, action='store_true',
+                        help="Plot the circuit after discovering it.")
+    parser.add_argument('--nodes_only', default=False, action='store_true',
+                        help="Only search for causally implicated features; do not draw edges.")
+    parser.add_argument('--plot_only', action="store_true",
+                        help="Do not run circuit discovery; just plot an existing circuit.")
+    parser.add_argument("--circuit_dir", type=str, default="circuits/",
+                        help="Directory to save/load circuits.")
+    parser.add_argument("--plot_dir", type=str, default="circuits/figures/",
+                        help="Directory to save figures.")
+    parser.add_argument('--seed', type=int, default=12)
+    parser.add_argument('--device', type=str, default='cuda:0')
+    args = parser.parse_args()
+
+
+    device = args.device
+
+    model = LanguageModel(args.model, device_map=device, dispatch=True)
+
+    if args.model != 'gpt2':
+        embed = model.gpt_neox.embed_in
+        attns = [layer.attention for layer in model.gpt_neox.layers]
+        mlps = [layer.mlp for layer in model.gpt_neox.layers]
+        resids = [layer for layer in model.gpt_neox.layers]
+    else:
+        embed = None   # embedding SAE doesn't exist for gpt2
+        attns = [layer.attn for layer in model.transformer.h]
+        mlps = [layer.mlp for layer in model.transformer.h]
+        resids = [layer for layer in model.transformer.h]
+
+    dictionaries = {}
+    if args.dict_id == 'id':
+        from dictionary_learning.dictionary import IdentityDict
+        dictionaries[embed] = IdentityDict(args.d_model)
+        for i in range(len(model.gpt_neox.layers)):
+            dictionaries[attns[i]] = IdentityDict(args.d_model)
+            dictionaries[mlps[i]] = IdentityDict(args.d_model)
+            dictionaries[resids[i]] = IdentityDict(args.d_model)
+    elif args.dict_id == 'gpt':
+        for i in range(len(model.transformer.h)):
+            dictionaries[attns[i]] = AutoEncoder.from_saelens(
+                "gpt2-small-hook-z-kk",
+                f"blocks.{i}.hook_z",
+                device=device
+            )
+            dictionaries[mlps[i]] = AutoEncoder.from_saelens(
+                "gpt2-small-mlp-tm",
+                f"blocks.{i}.hook_mlp_out",
+                device=device
+            )
+            dictionaries[resids[i]] = AutoEncoder.from_saelens(
+                "gpt2-small-res-jb",
+                f"blocks.{i}.hook_resid_pre",
+                device=device
+            )
+
+    else:
+        dictionaries[embed] = AutoEncoder.from_pretrained(
+            f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
+            device=device
+        )
+        for i in range(len(model.gpt_neox.layers)):
+            dictionaries[attns[i]] = AutoEncoder.from_pretrained(
+                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                device=device
+            )
+            dictionaries[mlps[i]] = AutoEncoder.from_pretrained(
+                f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                device=device
+            )
+            dictionaries[resids[i]] = AutoEncoder.from_pretrained(
+                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                device=device
+            )
+        print(dictionaries.keys())
+    
+    if args.data_type == 'nopair':
+        save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
+        examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'regular':
+        data_path = f"data/{args.dataset}.json"
+        save_basename = args.dataset
+        if args.aggregation == "sum":
+            examples = load_examples(data_path, args.num_examples, model, pad_to_length=args.example_length)
+        else:
+            examples = load_examples(data_path, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'hf':
+        save_basename = args.dataset.replace('/', '_')
+        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
+    
+    if args.data_type == 'hf':
+        for example in examples:
+            example_basename = save_basename + f"_{example['id']}"
+            process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, example['examples'])
+    else:
+        process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples)

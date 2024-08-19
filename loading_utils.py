@@ -6,6 +6,8 @@ import torch as t
 import torch.nn.functional as F
 from dictionary_learning.dictionary import AutoEncoder
 from dataclasses import dataclass
+from datasets import load_dataset
+
 
 @dataclass
 class DictionaryCfg():
@@ -106,6 +108,40 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
             break
 
     return examples
+
+
+
+def load_examples_hf(dataset, num_examples, model, data_dir='data', length=None):
+    examples = []
+    dset_dir = os.path.join(data_dir, dataset.replace("/", "_"))
+    
+    if not os.path.exists(dset_dir):
+        os.makedirs(dset_dir, exist_ok=True)
+        ds = load_dataset(dataset)
+        text = ds["train"]["text"]
+        for i, sent in enumerate(text):
+            tokenized = model.tokenizer(sent, max_length=length+1, truncation=True, return_length=True)#['input_ids']
+            if tokenized['length'] < length+1:
+                continue
+            retokenized = [model.tokenizer.decode(t) for t in tokenized['input_ids']]
+            json_data = [{'document_idx': -1, 'answer_token_in_doc_idx': -1, 'answer_token_global_idx': -1}]
+            json_data[0]['context'] = retokenized[:-1]
+            json_data[0]['answer'] = retokenized[-1]
+            fname = os.path.join(dset_dir, f"{i}.json")
+            with open(fname, 'w') as f:
+                json.dump(json_data, f)
+                
+    for i, fname in enumerate(os.listdir(dset_dir)):
+        examples.append({
+            'examples': load_examples_nopair(os.path.join(dset_dir, fname), 1, model, length=length), 
+            'id': i
+            })
+        if len(examples) == num_examples:
+            break
+    
+    return examples
+    
+    
 
 def get_annotation(dataset, model, data):
     # First, understand which dataset we're working with
