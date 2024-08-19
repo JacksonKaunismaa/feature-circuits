@@ -301,7 +301,6 @@ def jvp(
         left_vec : Union[SparseAct, Dict[int, SparseAct]],
         right_vec : SparseAct,
         return_without_right = False,
-        use_sparse_vj = True
 ):
     """
     Return a sparse shape [# downstream features + 1, # upstream features + 1] tensor of Jacobian-vector products.
@@ -355,6 +354,8 @@ def jvp(
         elif isinstance(left_vec, dict):
             def to_backprop(feat):
                 downstream_grads_via_feat = left_vec[feat]
+                print(feat, 'act', left_vec[feat].act.nonzero().sum().item(), left_vec[feat].act.sum().item(),
+                      left_vec[feat].res.nonzero().sum().item(), left_vec[feat].res.sum().item())
                 # this is (\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) @ m_bar  (in eq 6)
                 downstream_grads_via_feat_times_acts = (downstream_grads_via_feat @ downstream_act)
                 # sum over downstream features
@@ -397,29 +398,18 @@ def jvp(
     if not return_without_right:
         return t.sparse_coo_tensor(vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted))
     
-    if use_sparse_vj:
-        # vj_indices = t.tensor(
-        #     [[downstream_feat for downstream_feat in downstream_features for _ in vj_indices[downstream_feat].value],
-        #     t.cat([vj_indices[downstream_feat].value for downstream_feat in downstream_features], dim=0)],
-        # device=model.device)
-        # 1+1
-        # vj_values = t.cat([vj_values[downstream_feat].value for downstream_feat in downstream_features], dim=0)
+    # vj_indices = t.tensor(
+    #     [[downstream_feat for downstream_feat in downstream_features for _ in vj_indices[downstream_feat].value],
+    #     t.cat([vj_indices[downstream_feat].value for downstream_feat in downstream_features], dim=0)],
+    # device=model.device)
+    # 1+1
+    # vj_values = t.cat([vj_values[downstream_feat].value for downstream_feat in downstream_features], dim=0)
 
-        return (
-            t.sparse_coo_tensor(vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted)),
-            # t.sparse_coo_tensor(vj_indices, vj_values, (d_downstream_contracted, d_upstream))
-            (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
-        )
-        
-    else:
-        vj_result = t.zeros(d_downstream_contracted, d_upstream, device=model.device)
-        for downstream_feat in downstream_features:
-            vj_result[downstream_feat, vj_indices[downstream_feat].value] = vj_values[downstream_feat].value
-            
-        return (
-            t.sparse_coo_tensor(vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted)),
-            vj_result
-        )
+    return (
+        t.sparse_coo_tensor(vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted)),
+        # t.sparse_coo_tensor(vj_indices, vj_values, (d_downstream_contracted, d_upstream))
+        (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
+    )
     
 """   with jvp-fix applied  => 42x slowdown
 sparsity level on vj stuff gets sqrt'd, increasing it to ~3M rather than 14k

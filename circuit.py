@@ -122,6 +122,16 @@ def get_circuit(
         # when we unflatten, act ends up getting (10*6*32768) features, and res gets just the 60 (contracted)
         return SparseAct(act=unflattened[...,:f], res=unflattened[...,f:])
     
+    def unflatten2(grad, feat_idx):
+        # (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
+        b, s, f = effects[resids[0]].act.shape
+        indices = grad[0][feat_idx].to(model.device).unsqueeze(0)
+        values = grad[1][feat_idx].to(model.device)
+        shape = (grad[2][1],)
+        tensor = t.sparse_coo_tensor(indices, values, shape, is_coalesced=True).to_dense()
+        unflattened = rearrange(tensor, '(b s x) -> b s x', b=b, s=s)
+        return SparseAct(act=unflattened[...,:f], res=unflattened[...,f:])
+    
     features_by_submod = {
         submod : (effects[submod].to_tensor().flatten().abs() > node_threshold).nonzero().flatten().tolist() for submod in all_submods
     }  # submodule -> list of indices
@@ -147,7 +157,7 @@ def get_circuit(
     edges = defaultdict(lambda:{})
     edges[f'resid_{len(resids)-1}'] = { 'y' : effects[resids[-1]].to_tensor().flatten().to_sparse() }
 
-    def N(upstream, downstream):
+    def N(upstream, downstream, return_without_right=True):
         return jvp(
             clean,
             model,
@@ -157,7 +167,7 @@ def get_circuit(
             upstream,   # upstream submod
             grads[downstream],  # left_vec
             deltas[upstream],   # right_vec
-            return_without_right=True,
+            return_without_right=return_without_right,
         )
 
 
@@ -185,14 +195,14 @@ def get_circuit(
             else:
                 continue
 
-        RM_effect, _ = N(prev_resid, mlp)
+        RM_effect = N(prev_resid, mlp, return_without_right=False)
         print("RM done")
-        RA_effect, _ = N(prev_resid, attn)
+        RA_effect = N(prev_resid, attn, return_without_right=False)
         print("RA done")
 
-        MR_grad = MR_grad.coalesce()
-        AR_grad = AR_grad.coalesce()
-        print("coalescede!")
+        # MR_grad = MR_grad.coalesce()
+        # AR_grad = AR_grad.coalesce()
+        # print("coalescede!")
         # print({feat_idx : unflatten(MR_grad[feat_idx].to_dense()).shape for feat_idx in features_by_submod[resid]})
 
         # features_by_submod[resid] -> 172 indices in the n+1 residual
@@ -229,7 +239,7 @@ def get_circuit(
             mlp,  # downstream submod
             features_by_submod[resid],  # downstream features
             prev_resid,   # upstream submod
-            {feat_idx : unflatten(MR_grad[feat_idx].to_dense()) for feat_idx in features_by_submod[resid]}, # left_vec
+            {feat_idx : unflatten2(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec
             deltas[prev_resid],    # right_vec
         )
         print("RMR done")
@@ -240,13 +250,13 @@ def get_circuit(
             attn,
             features_by_submod[resid],
             prev_resid,
-            {feat_idx : unflatten(AR_grad[feat_idx].to_dense()) for feat_idx in features_by_submod[resid]},
+            {feat_idx : unflatten2(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
             deltas[prev_resid],
         )
         print("RAR done!")
 
         # max_abs += abs(RMR_effect).sum() + abs(RAR_effect).sum()
-        RR_effect, _ = N(prev_resid, resid)
+        RR_effect = N(prev_resid, resid, return_without_right=False)
 
         if layer > 0:    # for the future: infer this from a graph structure
             edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect
