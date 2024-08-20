@@ -1,18 +1,21 @@
 #!/bin/bash
 
 # EleutherAI/pythia-70m-deduped
+
 MODEL=$1
-DATA=$2
-NODE=$3
-EDGE=$4
-AGG=$5
-LENGTH=$6
-DICT_ID=$7
-DATA_TYPE=$8
+NUM_EXAMPLE=$2
+DATA=$3
+NODE=$4
+EDGE=$5
+AGG=$6
+LENGTH=$7
+DICT_ID=$8
+DATA_TYPE=$9
+
 
 python circuit.py \
-    --model $1 \
-    --num_examples 100 \
+    --model $MODEL \
+    --num_examples $NUM_EXAMPLE \
     --batch_size 10 \
     --dataset $DATA \
 	--node_threshold $NODE \

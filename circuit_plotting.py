@@ -16,7 +16,8 @@ def get_name(component, layer, idx):
         case _: raise ValueError(f"Invalid idx: {idx}")
 
 
-def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01, pen_thickness=1, annotations=None, save_dir='circuit'):
+def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01, pen_thickness=1, annotations=None, save_dir='circuit',
+                 ylabel=None):
 
     # get min and max node effects
     min_effect = min([v.to_tensor().min() for n, v in nodes.items() if n != 'y'])
@@ -148,7 +149,7 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
 
 
     # the cherry on top
-    G.node('y', shape='diamond')
+    G.node('y', shape='diamond', xlabel=ylabel)
     for idx in nodes_by_submod[f'resid_{layers-1}'].keys():
         weight = edges[f'resid_{layers-1}']['y'][tuple(idx)].item()
         if abs(weight) > edge_threshold:

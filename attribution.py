@@ -326,6 +326,7 @@ def jvp(
         vj_indices = {}
         vj_values = {}
 
+    print(len(downstream_features))
     with model.trace(input, **tracer_kwargs):
         # first specify forward pass modifications
         x = upstream_submod.output
@@ -354,14 +355,13 @@ def jvp(
         elif isinstance(left_vec, dict):
             def to_backprop(feat):
                 downstream_grads_via_feat = left_vec[feat]
-                print(feat, 'act', left_vec[feat].act.nonzero().sum().item(), left_vec[feat].act.sum().item(),
-                      left_vec[feat].res.nonzero().sum().item(), left_vec[feat].res.sum().item())
+                # print(feat, 'act', left_vec[feat].act.nonzero().sum().item(), left_vec[feat].act.sum().item(),
+                #       left_vec[feat].res.nonzero().sum().item(), left_vec[feat].res.sum().item())
                 # this is (\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) @ m_bar  (in eq 6)
                 downstream_grads_via_feat_times_acts = (downstream_grads_via_feat @ downstream_act)
                 # sum over downstream features
                 return downstream_grads_via_feat_times_acts.to_tensor().sum()
 
-        print(len(downstream_features))
         for downstream_feat in downstream_features:
             # or in eq 6: \nabla_u {(\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) * m_bar} 
             #             * (u_patch - u_clean)
