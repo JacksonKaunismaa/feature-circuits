@@ -387,6 +387,7 @@ def jvp(
     if return_without_right:
         d_upstream = len(upstream_act.value.to_tensor().flatten())
     
+    print('\tnnz', sum([vjv_indices[downstream_feat].shape[0] for downstream_feat in downstream_features]))
     ## make tensors
     vjv_indices = t.tensor(
         [[downstream_feat for downstream_feat in downstream_features for _ in vjv_indices[downstream_feat].value],

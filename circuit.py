@@ -141,10 +141,14 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
     mlp = mlps[layer]
     attn = attns[layer]
 
+    print("starting MR")
     MR_effect, MR_grad = N(mlp, resid)
+    print("starting AR")
     AR_effect, AR_grad = N(attn, resid)
+    print("starting AM")
     AM_effect, AM_grad = N(attn, mlp)
 
+    print("starting AMR")
     AMR_effect = jvp(
         clean,
         model,
@@ -169,9 +173,12 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         else:
             return
 
+    print("starting RM")
     RM_effect = N(prev_resid, mlp, return_without_right=False)
+    print("starting RA")
     RA_effect = N(prev_resid, attn, return_without_right=False)
     
+    print("starting RAM")
     RAM_effect = jvp(
         clean,
         model,
@@ -182,8 +189,8 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         {feat_idx : unflatten(AM_grad, feat_idx) for feat_idx in features_by_submod[mlp]}, 
         deltas[prev_resid],
     )
-    
 
+    print("starting RMR")
     RMR_effect = jvp(
         clean,     # input
         model,     # model 
@@ -194,6 +201,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         {feat_idx : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
         deltas[prev_resid],    # right_vec  (start)
     )
+    print("starting RAR")
     RAR_effect = jvp(
         clean,
         model,
@@ -205,12 +213,13 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         deltas[prev_resid],
     )
 
+    print("starting RR")
     RR_effect = N(prev_resid, resid, return_without_right=False)
 
     edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect - RAM_effect
     edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
     edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect - (RMR_effect - RAM_effect) - RAR_effect
-
+    print("layer done", layer)
 
 def get_circuit(
         clean,
