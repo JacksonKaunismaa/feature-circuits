@@ -4,6 +4,7 @@ import json
 import math
 import os
 from collections import defaultdict
+from typing import Dict
 
 import torch as t
 from einops import rearrange
@@ -76,6 +77,21 @@ def sparse_mean(x, dim):
         return x.sum(dim=dim) / x.shape[dim]
     else:
         return x.sum(dim=dim) / prod(x.shape[d] for d in dim)
+    
+    
+def agg_sum_sparse_tuples(tuples, dims):
+    dims_downstream = [d for d in dims if d < 3]
+    dims_upstream = [d-3 for d in dims if d >= 3]
+    
+    res_shape = [d for d in tuples[2] if d not in dims]
+    res_values = {}
+    res_ind = {}
+    for feat_idx in tuples[0]:
+        res_values[feat_idx] = tuples[1][feat_idx].sum(dim=dims_upstream)
+        res_ind
+        
+        
+    
 
 ######## end sparse tensor utilities ########
 
@@ -110,7 +126,7 @@ def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids,
         mlp,  # downstream submod
         features_by_submod[resid],  # downstream features
         prev_resid,   # upstream submod
-        {feat_idx : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec
+        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec
         deltas[prev_resid],    # right_vec
     )
     RAR_effect = jvp(
@@ -120,7 +136,7 @@ def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids,
         attn,
         features_by_submod[resid],
         prev_resid,
-        {feat_idx : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
+        {tuple(feat_idx) : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
         deltas[prev_resid],
     )
 
@@ -140,15 +156,13 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
     resid = resids[layer]
     mlp = mlps[layer]
     attn = attns[layer]
-
-    print("starting MR")
-    MR_effect, MR_grad = N(mlp, resid)
-    print("starting AR")
-    AR_effect, AR_grad = N(attn, resid)
-    print("starting AM")
-    AM_effect, AM_grad = N(attn, mlp)
-
-    print("starting AMR")
+    print('starting MR')
+    MR_effect, MR_grad = N(mlp, resid, name='MR')
+    print('starting AR')
+    AR_effect, AR_grad = N(attn, resid, name='AR')
+    print('starting AM')
+    AM_effect, AM_grad = N(attn, mlp, name='AM')
+    print('starting AMR')
     AMR_effect = jvp(
         clean,
         model,
@@ -156,7 +170,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         mlp,
         features_by_submod[resid],
         attn,
-        {feat_idx : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
+        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
         deltas[attn],
     )
     
@@ -186,7 +200,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         attn,
         features_by_submod[mlp],
         prev_resid,
-        {feat_idx : unflatten(AM_grad, feat_idx) for feat_idx in features_by_submod[mlp]}, 
+        {tuple(feat_idx) : unflatten(AM_grad, feat_idx) for feat_idx in features_by_submod[mlp]}, 
         deltas[prev_resid],
     )
 
@@ -198,7 +212,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         mlp,  # downstream submod (middle)
         features_by_submod[resid],  # downstream features (end)
         prev_resid,   # upstream submod  ( start)
-        {feat_idx : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
+        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
         deltas[prev_resid],    # right_vec  (start)
     )
     print("starting RAR")
@@ -209,7 +223,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         attn,
         features_by_submod[resid],
         prev_resid,
-        {feat_idx : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
+        {tuple(feat_idx) : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
         deltas[prev_resid],
     )
 
@@ -253,18 +267,21 @@ def get_circuit(
         method='ig' # get better approximations for early layers by using ig
     )
     
+    t.cuda.empty_cache()  # helps a bit with memory management
+    
     def unflatten(grad, feat_idx):
         # (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
         b, s, f = effects[resids[0]].act.shape
-        indices = grad[0][feat_idx].to(model.device).unsqueeze(0)
+        feat_idx = tuple(feat_idx)
+        indices = grad[0][feat_idx].to(model.device)
         values = grad[1][feat_idx].to(model.device)
-        shape = (grad[2][1],)
-        tensor = t.sparse_coo_tensor(indices, values, shape, is_coalesced=True).to_dense()
-        unflattened = rearrange(tensor, '(b s x) -> b s x', b=b, s=s)
-        return SparseAct(act=unflattened[...,:f], res=unflattened[...,f:])
+        shape = grad[2][1]
+        tensor = t.sparse_coo_tensor(indices.T, values, shape, is_coalesced=True).to_dense()
+        # tensor = rearrange(tensor, '(b s x) -> b s x', b=b, s=s)
+        return SparseAct(act=tensor[...,:f], res=tensor[...,f:])
     
     features_by_submod = {
-        submod : (effects[submod].to_tensor().flatten().abs() > node_threshold).nonzero().flatten().tolist() for submod in all_submods
+        submod : (effects[submod].to_tensor().abs() > node_threshold).nonzero().tolist() for submod in all_submods
     }  # submodule -> list of indices
 
     n_layers = len(resids)
@@ -286,9 +303,9 @@ def get_circuit(
         return nodes, None
 
     edges = defaultdict(lambda:{})
-    edges[f'resid_{len(resids)-1}'] = { 'y' : effects[resids[-1]].to_tensor().flatten().to_sparse() }
+    edges[f'resid_{len(resids)-1}'] = { 'y' : effects[resids[-1]].to_tensor().to_sparse() }
 
-    def N(upstream, downstream, return_without_right=True):
+    def N(upstream, downstream, return_without_right=True, name=None):
         return jvp(
             clean,
             model,
@@ -299,6 +316,7 @@ def get_circuit(
             grads[downstream],  # left_vec
             deltas[upstream],   # right_vec
             return_without_right=return_without_right,
+            name=name
         )
 
 
@@ -306,25 +324,25 @@ def get_circuit(
     # max_abs = 0.0
     for layer in reversed(range(len(resids))):
         if parallel_attn:
-            compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N)
+            compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten ,features_by_submod, edges, N)
         else:
             compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N)
         # print('layer complete!', layer)
     # if max_abs > 0:
     #     print("Detected non-zero RMR effects!")
     # rearrange weight matrices
-    for child in edges:
-        # get shape for child
-        bc, sc, fc = nodes[child].act.shape
-        for parent in edges[child]:
-            weight_matrix = edges[child][parent]
-            if parent == 'y':
-                weight_matrix = sparse_reshape(weight_matrix, (bc, sc, fc+1))
-            else:
-                bp, sp, fp = nodes[parent].act.shape
-                assert bp == bc
-                weight_matrix = sparse_reshape(weight_matrix, (bp, sp, fp+1, bc, sc, fc+1))
-            edges[child][parent] = weight_matrix
+    # for child in edges:
+    #     # get shape for child
+    #     bc, sc, fc = nodes[child].act.shape
+    #     for parent in edges[child]:
+    #         weight_matrix = edges[child][parent]
+    #         if parent == 'y':
+    #             weight_matrix = sparse_reshape(weight_matrix, (bc, sc, fc+1))
+    #         else:
+    #             bp, sp, fp = nodes[parent].act.shape
+    #             assert bp == bc
+    #             weight_matrix = sparse_reshape(weight_matrix, (bp, sp, fp+1, bc, sc, fc+1))
+    #         edges[child][parent] = weight_matrix
     
     if aggregation == 'sum':
         # aggregate across sequence position
