@@ -549,14 +549,15 @@ def process_examples(args, device, model, embed, attns, mlps, resids, dictionari
             
         plot_circuit(
             nodes, 
-            edges, 
+            edges,
             layers=len(attns),   # assume we include attns at all layers
             node_threshold=args.node_threshold, 
             edge_threshold=args.edge_threshold, 
             pen_thickness=args.pen_thickness, 
             annotations=annotations, 
             save_dir=f'{args.plot_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}',
-            ylabel=ylabel
+            ylabel=ylabel,
+            seq_len=args.example_length
         )
 
 if __name__ == '__main__':

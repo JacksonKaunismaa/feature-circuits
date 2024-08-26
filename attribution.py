@@ -331,7 +331,8 @@ def jvp(
     # numel_per_batch = input.shape[1] * numel_per_batch_seq
     # seq_len = input.shape[1]
     k_threshold = int(edge_sparsity * numel_per_batch)
-    print(k_threshold)
+    print('feat', len(downstream_features), input.shape[1])
+    print('\tthresh', k_threshold)
     # batch_ind = torch.arange(input.shape[0]).view(-1, 1, 1) * numel_per_batch
     # seq_ind = torch.arange(seq_len).view(1, -1, 1) * numel_per_batch_seq
     # flat_index_add = batch_ind + seq_ind
@@ -344,7 +345,6 @@ def jvp(
         vj_indices = {}
         vj_values = {}
 
-    # print(len(downstream_features))
     with model.trace(input, **tracer_kwargs):
         # first specify forward pass modifications
         x = upstream_submod.output.save()

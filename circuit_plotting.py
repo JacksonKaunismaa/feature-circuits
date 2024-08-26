@@ -2,22 +2,24 @@ from graphviz import Digraph
 from collections import defaultdict
 import re
 import os
+from tqdm import trange
+import torch as t
 
-def get_name(component, layer, idx):
+def get_name(component, layer, idx, err_idx):
     match idx:
         case (seq, feat):
-            if feat == 32768: feat = 'ε'
+            if feat == err_idx: feat = 'ε'
             if layer == -1: return f'{seq}, embed/{feat}'
             return f'{seq}, {component}_{layer}/{feat}'
         case (feat,):
-            if feat == 32768: feat = 'ε'
+            if feat == err_idx: feat = 'ε'
             if layer == -1: return f'embed/{feat}'
             return f'{component}_{layer}/{feat}'
         case _: raise ValueError(f"Invalid idx: {idx}")
 
 
 def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01, pen_thickness=1, annotations=None, save_dir='circuit',
-                 ylabel=None):
+                 ylabel=None, seq_len=1.0):
 
     # get min and max node effects
     min_effect = min([v.to_tensor().min() for n, v in nodes.items() if n != 'y'])
@@ -85,18 +87,25 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
     for layer in range(layers):
         for component in ['attn', 'mlp', 'resid']:
             submod_nodes = nodes[f'{component}_{layer}'].to_tensor()
+            n_features = submod_nodes.numel()
+            k_threshold = int(node_threshold * n_features * seq_len)
+            topk = submod_nodes.abs().flatten().topk(k_threshold)
+            topk_ind = topk.indices[topk.values > 0]
+            topk_ind = t.stack(t.unravel_index(topk_ind, submod_nodes.shape), dim=1).tolist()
+            
             nodes_by_submod[f'{component}_{layer}'] = {
-                tuple(idx.tolist()) : submod_nodes[tuple(idx)].item() for idx in (submod_nodes.abs() > node_threshold).nonzero()
+                tuple(idx) : submod_nodes[tuple(idx)].item() for idx in topk_ind
             }
     
-    for layer in range(start_layer, layers):
+    for layer in trange(start_layer, layers):
         for component in ['attn', 'mlp', 'resid']:
             if layer == start_layer and component != 'resid': continue
+            err_idx = nodes[f'{component}_{layer}'].shape[0]
             with G.subgraph(name=f'layer {layer} {component}') as subgraph:
                 subgraph.attr(rank='same')
                 max_seq_pos = None
                 for idx, effect in nodes_by_submod[f'{component}_{layer}'].items():
-                    name = get_name(component, layer, idx)
+                    name = get_name(component, layer, idx, err_idx)
                     fillhex, texthex = to_hex(effect)
                     if name[-1:].endswith('ε'):
                         subgraph.node(name, shape='triangle', width="1.6", height="0.8", fixedsize="true",
@@ -122,13 +131,14 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
 
         
         for component in ['attn', 'mlp']:
-            if layer == -1: continue
+            if layer == start_layer: continue
+            err_idx = nodes[f'{component}_{layer}'].shape[0]
             for upstream_idx in nodes_by_submod[f'{component}_{layer}'].keys():
                 for downstream_idx in nodes_by_submod[f'resid_{layer}'].keys():
                     weight = edges[f'{component}_{layer}'][f'resid_{layer}'][tuple(downstream_idx)][tuple(upstream_idx)].item()
                     if abs(weight) > edge_threshold:
-                        uname = get_name(component, layer, upstream_idx)
-                        dname = get_name('resid', layer, downstream_idx)
+                        uname = get_name(component, layer, upstream_idx, err_idx)
+                        dname = get_name('resid', layer, downstream_idx, err_idx)
                         G.edge(
                             uname, dname,
                             penwidth=str(abs(weight) * pen_thickness),
@@ -137,13 +147,14 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
         
         # add edges to previous layer resid
         for component in ['attn', 'mlp', 'resid']:
-            if layer == -1: continue
+            if layer == start_layer: continue
+            err_idx = nodes[f'{component}_{layer}'].shape[0]
             for upstream_idx in nodes_by_submod[f'resid_{layer-1}'].keys():
                 for downstream_idx in nodes_by_submod[f'{component}_{layer}'].keys():
                     weight = edges[f'resid_{layer-1}'][f'{component}_{layer}'][tuple(downstream_idx)][tuple(upstream_idx)].item()
                     if abs(weight) > edge_threshold:
-                        uname = get_name('resid', layer-1, upstream_idx)
-                        dname = get_name(component, layer, downstream_idx)
+                        uname = get_name('resid', layer-1, upstream_idx, err_idx)
+                        dname = get_name(component, layer, downstream_idx, err_idx)
                         G.edge(
                             uname, dname,
                             penwidth=str(abs(weight) * pen_thickness),
@@ -153,10 +164,11 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
 
     # the cherry on top
     G.node('y', shape='diamond', xlabel=ylabel)
+    err_idx = nodes[f'resid_{layers-1}'].shape[0]
     for idx in nodes_by_submod[f'resid_{layers-1}'].keys():
         weight = edges[f'resid_{layers-1}']['y'][tuple(idx)].item()
         if abs(weight) > edge_threshold:
-            name = get_name('resid', layers-1, idx)
+            name = get_name('resid', layers-1, idx, err_idx)
             G.edge(
                 name, 'y',
                 penwidth=str(abs(weight) * pen_thickness),
