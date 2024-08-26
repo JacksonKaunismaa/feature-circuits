@@ -304,8 +304,9 @@ def jvp(
         left_vec : Union[SparseAct, Dict[int, SparseAct]],
         right_vec : SparseAct,
         return_without_right = False,
-        edge_sparsity=0.005,
-        name=None
+        edge_sparsity=0.0005,
+        name=None,
+        shapes=None
 ):
     """
     Return a sparse shape [# downstream features + 1, # upstream features + 1] tensor of Jacobian-vector products.
@@ -343,10 +344,10 @@ def jvp(
         vj_indices = {}
         vj_values = {}
 
-    print(len(downstream_features))
+    # print(len(downstream_features))
     with model.trace(input, **tracer_kwargs):
         # first specify forward pass modifications
-        x = upstream_submod.output
+        x = upstream_submod.output.save()
         if is_tuple[upstream_submod]:
             x = x[0]
         x_hat, f = upstream_dict(x, output_features=True)
@@ -419,8 +420,11 @@ def jvp(
     d_upstream_contracted = ((upstream_act.value @ upstream_act.value).to_tensor()).shape
     if return_without_right:
         d_upstream = (upstream_act.value.to_tensor()).shape
+        
+    if shapes is not None:
+        d_downstream_contracted, d_upstream_contracted = shapes[:3], shapes[3:]
     
-    print('\tnnz', sum([vjv_indices[downstream_feat].shape[0] for downstream_feat in downstream_features]))
+    print('\tnnz', sum([vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features]))
     ## make tensors
     downstream_indices = t.tensor([downstream_feat for downstream_feat in downstream_features 
                                 for _ in vjv_indices[tuple(downstream_feat)].value], device=model.device).T
@@ -433,7 +437,8 @@ def jvp(
     # print(vjv_values.shape, upstream_act.value.shape, d_downstream_contracted, d_upstream_contracted, d_upstream,
     #       upstream_act.value.res.shape, upstream_act.value.act.shape)
     if not return_without_right:
-        return (vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted))
+        return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted))
+        
     
     # vj_indices = t.tensor(
     #     [[downstream_feat for downstream_feat in downstream_features for _ in vj_indices[downstream_feat].value],

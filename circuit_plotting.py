@@ -75,20 +75,23 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
     G.node_attr.update(shape="box", style="rounded")
 
     # rename embed to resid_-1
-    nodes_by_submod = {
-        'resid_-1' : {tuple(idx.tolist()) : nodes['embed'].to_tensor()[tuple(idx)].item() for idx in (nodes['embed'].to_tensor().abs() > node_threshold).nonzero()}
-    }
+    start_layer = 0
+    nodes_by_submod = {}
+    if 'embed' in nodes:
+        nodes_by_submod['resid_-1'] = {tuple(idx.tolist()) : nodes['embed'].to_tensor()[tuple(idx)].item() for idx in (nodes['embed'].to_tensor().abs() > node_threshold).nonzero()}
+        edges['resid_-1'] = edges['embed']
+        start_layer = -1
+    
     for layer in range(layers):
         for component in ['attn', 'mlp', 'resid']:
             submod_nodes = nodes[f'{component}_{layer}'].to_tensor()
             nodes_by_submod[f'{component}_{layer}'] = {
                 tuple(idx.tolist()) : submod_nodes[tuple(idx)].item() for idx in (submod_nodes.abs() > node_threshold).nonzero()
             }
-    edges['resid_-1'] = edges['embed']
     
-    for layer in range(-1, layers):
+    for layer in range(start_layer, layers):
         for component in ['attn', 'mlp', 'resid']:
-            if layer == -1 and component != 'resid': continue
+            if layer == start_layer and component != 'resid': continue
             with G.subgraph(name=f'layer {layer} {component}') as subgraph:
                 subgraph.attr(rank='same')
                 max_seq_pos = None
@@ -219,9 +222,13 @@ def plot_circuit_posaligned(nodes, edges, layers=6, length=6, example_text="The 
     G.graph_attr.update(rankdir='BT', newrank='true')
     G.node_attr.update(shape="box", style="rounded")
 
-    nodes_by_submod = {
-        'resid_-1' : {tuple(idx.tolist()) : nodes['embed'].to_tensor()[tuple(idx)].item() for idx in (nodes['embed'].to_tensor().abs() > node_threshold).nonzero()}
-    }
+    start_layer = 0
+    if 'embed' in nodes:
+        nodes_by_submod = {
+            'resid_-1' : {tuple(idx.tolist()) : nodes['embed'].to_tensor()[tuple(idx)].item() for idx in (nodes['embed'].to_tensor().abs() > node_threshold).nonzero()}
+        }
+        edges['resid_-1'] = edges['embed']
+        start_layer = -1
     nodes_by_seqpos = defaultdict(list)
     nodes_by_layer = defaultdict(list)
     edgeset = set()
@@ -232,7 +239,6 @@ def plot_circuit_posaligned(nodes, edges, layers=6, length=6, example_text="The 
             nodes_by_submod[f'{component}_{layer}'] = {
                 tuple(idx.tolist()) : submod_nodes[tuple(idx)].item() for idx in (submod_nodes.abs() > node_threshold).nonzero()
             }
-    edges['resid_-1'] = edges['embed']
 
     # add words to bottom of graph
     with G.subgraph(name=f'words') as subgraph:
@@ -246,9 +252,9 @@ def plot_circuit_posaligned(nodes, edges, layers=6, length=6, example_text="The 
                 subgraph.edge(prev_word, word, style='invis', minlen="2")
             prev_word = word
 
-    for layer in range(-1, layers):
+    for layer in range(start_layer, layers):
         for component in ['attn', 'mlp', 'resid']:
-            if layer == -1 and component != 'resid': continue
+            if layer == start_layer and component != 'resid': continue
             with G.subgraph(name=f'layer {layer} {component}') as subgraph:
                 subgraph.attr(rank='same')
                 max_seq_pos = None

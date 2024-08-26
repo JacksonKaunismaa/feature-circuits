@@ -96,7 +96,8 @@ def agg_sum_sparse_tuples(tuples, dims):
 ######## end sparse tensor utilities ########
 
 
-def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N):
+def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, 
+                                deltas, unflatten, features_by_submod, edges, N, edge_threshold):
     resid = resids[layer]
     mlp = mlps[layer]
     attn = attns[layer]
@@ -128,6 +129,7 @@ def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids,
         prev_resid,   # upstream submod
         {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec
         deltas[prev_resid],    # right_vec
+        edge_sparsity=edge_threshold
     )
     RAR_effect = jvp(
         clean,
@@ -138,6 +140,7 @@ def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids,
         prev_resid,
         {tuple(feat_idx) : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
         deltas[prev_resid],
+        edge_sparsity=edge_threshold
     )
 
     RR_effect = N(prev_resid, resid, return_without_right=False)
@@ -152,17 +155,18 @@ def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids,
         edges['embed'][f'resid_0'] = RR_effect - RMR_effect - RAR_effect
         
         
-def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N):
+def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, 
+                            deltas, unflatten, features_by_submod, edges, N, edge_threshold):
     resid = resids[layer]
     mlp = mlps[layer]
     attn = attns[layer]
-    print('starting MR')
+    # print('starting MR')
     MR_effect, MR_grad = N(mlp, resid, name='MR')
-    print('starting AR')
+    # print('starting AR')
     AR_effect, AR_grad = N(attn, resid, name='AR')
-    print('starting AM')
+    # print('starting AM')
     AM_effect, AM_grad = N(attn, mlp, name='AM')
-    print('starting AMR')
+    # print('starting AMR')
     AMR_effect = jvp(
         clean,
         model,
@@ -170,8 +174,10 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         mlp,
         features_by_submod[resid],
         attn,
-        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
+        {tuple(feat_idx) : unflatten(MR_grad, feat_idx, mlp) for feat_idx in features_by_submod[resid]},
         deltas[attn],
+        edge_sparsity=edge_threshold,
+        shapes=AR_effect.shape
     )
     
     edges[f'mlp_{layer}'][f'resid_{layer}'] = MR_effect
@@ -187,24 +193,29 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         else:
             return
 
-    print("starting RM")
+    # print("starting RM")
     RM_effect = N(prev_resid, mlp, return_without_right=False)
-    print("starting RA")
+    # print("starting RA")
     RA_effect = N(prev_resid, attn, return_without_right=False)
     
-    print("starting RAM")
+    print("starting RAM", layer)
     RAM_effect = jvp(
-        clean,
-        model,
-        dictionaries,
-        attn,
-        features_by_submod[mlp],
-        prev_resid,
-        {tuple(feat_idx) : unflatten(AM_grad, feat_idx) for feat_idx in features_by_submod[mlp]}, 
-        deltas[prev_resid],
+        clean,  # input
+        model,  # model
+        dictionaries,  # dictionaries
+        attn,   # downstream submod (middle)
+        features_by_submod[mlp],  # downstream features (end)
+        prev_resid,  # upstream submod (start)
+        {tuple(feat_idx) : unflatten(AM_grad, feat_idx, attn) for feat_idx in features_by_submod[mlp]},   # left_vec (middle->end)
+        deltas[prev_resid],  # right_vec (start)
+        edge_sparsity=edge_threshold,
+        shapes=RM_effect.shape
+        # downstream_shape=mlp
     )
 
-    print("starting RMR")
+    RR_effect = N(prev_resid, resid, return_without_right=False)
+    
+    # print("starting RMR")
     RMR_effect = jvp(
         clean,     # input
         model,     # model 
@@ -212,10 +223,12 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         mlp,  # downstream submod (middle)
         features_by_submod[resid],  # downstream features (end)
         prev_resid,   # upstream submod  ( start)
-        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
+        {tuple(feat_idx) : unflatten(MR_grad, feat_idx, mlp) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
         deltas[prev_resid],    # right_vec  (start)
+        edge_sparsity=edge_threshold,
+        shapes=RR_effect.shape
     )
-    print("starting RAR")
+    # print("starting RAR")
     RAR_effect = jvp(
         clean,
         model,
@@ -223,12 +236,13 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         attn,
         features_by_submod[resid],
         prev_resid,
-        {tuple(feat_idx) : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
+        {tuple(feat_idx) : unflatten(AR_grad, feat_idx, attn) for feat_idx in features_by_submod[resid]},
         deltas[prev_resid],
+        edge_sparsity=edge_threshold,
+        shapes=RR_effect.shape
     )
 
-    print("starting RR")
-    RR_effect = N(prev_resid, resid, return_without_right=False)
+    # print("starting RR")
 
     edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect - RAM_effect
     edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
@@ -269,9 +283,9 @@ def get_circuit(
     
     t.cuda.empty_cache()  # helps a bit with memory management
     
-    def unflatten(grad, feat_idx):
+    def unflatten(grad, feat_idx, submod):
         # (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
-        b, s, f = effects[resids[0]].act.shape
+        b, s, f = effects[submod].act.shape
         feat_idx = tuple(feat_idx)
         indices = grad[0][feat_idx].to(model.device)
         values = grad[1][feat_idx].to(model.device)
@@ -280,9 +294,15 @@ def get_circuit(
         # tensor = rearrange(tensor, '(b s x) -> b s x', b=b, s=s)
         return SparseAct(act=tensor[...,:f], res=tensor[...,f:])
     
-    features_by_submod = {
-        submod : (effects[submod].to_tensor().abs() > node_threshold).nonzero().tolist() for submod in all_submods
-    }  # submodule -> list of indices
+    features_by_submod = {}
+    for submod in all_submods:
+        effect = effects[submod].to_tensor()
+        n_features = effect.numel()
+        k_threshold = int(node_threshold * n_features)
+        topk = effect.abs().flatten().topk(k_threshold)
+        topk_ind = topk.indices[topk.values > 0]
+        features_by_submod[submod] = t.stack(t.unravel_index(topk_ind, effect.shape), dim=1).tolist()
+      # submodule -> list of indices
 
     n_layers = len(resids)
 
@@ -316,6 +336,7 @@ def get_circuit(
             grads[downstream],  # left_vec
             deltas[upstream],   # right_vec
             return_without_right=return_without_right,
+            edge_sparsity=edge_threshold,
             name=name
         )
 
@@ -324,9 +345,9 @@ def get_circuit(
     # max_abs = 0.0
     for layer in reversed(range(len(resids))):
         if parallel_attn:
-            compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten ,features_by_submod, edges, N)
+            compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten ,features_by_submod, edges, N, edge_threshold)
         else:
-            compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N)
+            compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N, edge_threshold)
         # print('layer complete!', layer)
     # if max_abs > 0:
     #     print("Detected non-zero RMR effects!")
@@ -529,7 +550,7 @@ def process_examples(args, device, model, embed, attns, mlps, resids, dictionari
         plot_circuit(
             nodes, 
             edges, 
-            layers=len(model.gpt_neox.layers), 
+            layers=len(attns),   # assume we include attns at all layers
             node_threshold=args.node_threshold, 
             edge_threshold=args.edge_threshold, 
             pen_thickness=args.pen_thickness, 
@@ -631,6 +652,7 @@ if __name__ == '__main__':
                 f"blocks.{i}.hook_resid_pre",
                 device=device
             )
+            
 
     else:
         dictionaries[embed] = AutoEncoder.from_pretrained(
