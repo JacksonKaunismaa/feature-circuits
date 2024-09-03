@@ -638,9 +638,9 @@ if __name__ == '__main__':
             dictionaries[resids[i]] = IdentityDict(args.d_model)
     elif args.dict_id == 'gpt':
         for i in range(len(model.transformer.h)):
-            dictionaries[attns[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-hook-z-kk",
-                f"blocks.{i}.hook_z",
+            dictionaries[attns[i]] = AutoEncoder.from_hf(
+                "jbloom/GPT2-Small-OAI-v5-128k-attn-out-SAEs",
+                f"v5_128k_layer_{i}/sae_weights.safetensors",
                 device=device
             )
             dictionaries[mlps[i]] = AutoEncoder.from_saelens(
