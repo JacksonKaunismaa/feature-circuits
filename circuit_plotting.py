@@ -23,15 +23,12 @@ def get_name(component, layer, idx, err_idx, add_layer=True):
         case _: raise ValueError(f"Invalid idx: {idx}")
         
         
-def normalize_weight(weight, edge_set, pen_thickness, normalization='linear'):
-    edge_scale = float(max(abs(edge_set.values().min()), abs(edge_set.values().max())))
+def normalize_weight(weight, edge_scale, pen_thickness, normalization='linear'):
     if normalization == 'linear':
         n_weight = weight / (edge_scale)
-        penwidth = str(abs(n_weight) * pen_thickness)
     elif normalization == 'log':
-        n_weight = np.log(abs(weight) + 1e-6) / np.log(edge_scale + 1e-6)
-        penwidth = str(abs(n_weight) * pen_thickness)
-    return penwidth
+        n_weight = abs(np.log(abs(weight) + 1e-6) / np.log(edge_scale + 1e-6))
+    return str(abs(n_weight) * pen_thickness)
 
 def dfs(edges, start, end):
     visited = set()
@@ -97,7 +94,7 @@ def _get_label(name, annotations=None):
 
 
 def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01, pen_thickness=1, annotations=None, save_dir='circuit',
-                 ylabel=None, seq_len=1.0, normalization='log', prune=True):
+                 ylabel=None, seq_len=1.0, normalization='log', prune=True, post_resids=False):
 
     # get min and max node effects
     mins = {n: v.to_tensor().min() for n, v in nodes.items() if n != 'y'}
@@ -129,24 +126,27 @@ def plot_circuit(nodes, edges, layers=6, node_threshold=0.1, edge_threshold=0.01
                 tuple(idx) : submod_nodes[tuple(idx)].item() for idx in topk_ind
             }
     
-    pruned_G = build_pruned_graph(nodes, edges, layers, start_layer, nodes_by_submod) if prune else None
+    pruned_G = build_pruned_graph(nodes, edges, layers, start_layer, nodes_by_submod, post_resids) if prune else None
     G = build_formatted_graph(nodes, edges, layers, pen_thickness, ylabel, normalization, to_hex, 
-                              get_label, start_layer, nodes_by_submod, pruned_G)
+                              get_label, start_layer, nodes_by_submod, post_resids, pruned_G=pruned_G)
 
     if not os.path.exists(os.path.dirname(save_dir)):
         os.makedirs(os.path.dirname(save_dir))
     G.render(save_dir, format='png', cleanup=False)
     
     
-def build_pruned_graph(nodes, edges, layers, start_layer, nodes_by_submod):
+def build_pruned_graph(nodes, edges, layers, start_layer, nodes_by_submod, post_resids, first_layer_type='attn'):
     G = nx.DiGraph()
     
     for layer in trange(start_layer, layers):
-        start_node = f'resid_{layer-1}'
+        if post_resids and layer == start_layer:
+            start_node = f'{first_layer_type}_{start_layer}'
+        else:
+            start_node = f'resid_{layer-1}'
         end_node = f'resid_{layer}'
         
         # select all edges that are on the path from resid-1 to resid
-        if layer == start_layer: continue
+        if layer == start_layer and not post_resids: continue
         layer_edges = dfs(edges, start_node, end_node)
         
         for (up, down) in layer_edges:
@@ -172,15 +172,17 @@ def build_pruned_graph(nodes, edges, layers, start_layer, nodes_by_submod):
     
     # restrict to nodes that are reachable from a starter node
     relevant_nodes = set()
-    starter_nodes = nodes_by_submod[f'resid_{start_layer}'].keys()
-    err_idx = nodes[f'resid_{start_layer}'].shape[0]
-    for starter in starter_nodes:
-        s = get_name('resid', start_layer, starter, err_idx)
-        if s in nodes_reaching_terminal:  # if the starter actually goes to terminal
-            reachable_nodes = nx.descendants(G, s)  # all nodes reachable from this starter node
-            relevant_nodes.update(reachable_nodes.intersection(nodes_reaching_terminal))  # if go to terminal and reachable by this starter
-            relevant_nodes.add(s)
-    
+    starter_nodes = {}
+    for component in ['attn', 'mlp', 'resid']:  # allow any first layer node type to be a starter
+        starter_nodes = nodes_by_submod[f'{component}_{start_layer}'].keys()
+        for starter in starter_nodes:
+            err_idx = nodes[f'{component}_{start_layer}'].shape[0]
+            s = get_name(component, start_layer, starter, err_idx)
+            if s in nodes_reaching_terminal:  # if the starter actually goes to terminal
+                reachable_nodes = nx.descendants(G, s)  # all nodes reachable from this starter node
+                relevant_nodes.update(reachable_nodes.intersection(nodes_reaching_terminal))  # if go to terminal and reachable by this starter
+                relevant_nodes.add(s)
+        
     # subgraph with only nodes that are on a path from resid_{start} to y
     pruned_graph = G.subgraph(relevant_nodes).copy()    
     return pruned_graph 
@@ -195,7 +197,8 @@ def add_edge_prune_filter(uname, dname, G, pruned_G, **kwargs):
         return
     G.edge(uname, dname, **kwargs)
 
-def build_formatted_graph(nodes, edges, layers, pen_thickness, ylabel, normalization, to_hex, get_label, start_layer, nodes_by_submod, pruned_G=None):
+def build_formatted_graph(nodes, edges, layers, pen_thickness, ylabel, normalization, to_hex, get_label, start_layer, nodes_by_submod, 
+                          post_resids, first_layer_type='attn', pruned_G=None):
     G = Digraph(name='Feature circuit')
     G.graph_attr.update(rankdir='BT', newrank='true')
     G.node_attr.update(shape="box", style="rounded")
@@ -233,16 +236,20 @@ def build_formatted_graph(nodes, edges, layers, pen_thickness, ylabel, normaliza
                             if f'{component}_{layer}_#{seq_prev}_post' in ''.join(subgraph.body):
                                 subgraph.edge(f'{component}_{layer}_#{seq_prev}_post', f'{component}_{layer}_#{seq}_pre', style='invis')
 
-        start_node = f'resid_{layer-1}'
+        if post_resids and layer == start_layer:
+            start_node = f'{first_layer_type}_{start_layer}'
+        else:
+            start_node = f'resid_{layer-1}'
         end_node = f'resid_{layer}'
         
         # # select all edges that are on the path from resid-1 to resid
-        if layer == start_layer: continue
+        if layer == start_layer and not post_resids: continue
         layer_edges = dfs(edges, start_node, end_node)
         
         for (up, down) in layer_edges:
             err_idx = nodes[up].shape[0]
             jacobian = edges[up][down]
+            edge_scale = float(max(abs(jacobian.values().min()), abs(jacobian.values().max())))
             for upstream_idx in nodes_by_submod[up].keys():
                 for downstream_idx in nodes_by_submod[down].keys():
                     weight = jacobian[tuple(downstream_idx)][tuple(upstream_idx)].item()
@@ -251,19 +258,21 @@ def build_formatted_graph(nodes, edges, layers, pen_thickness, ylabel, normaliza
                         dname = get_name(down, layer, downstream_idx, err_idx, add_layer=False)
 
                         add_edge_prune_filter(uname, dname, G, pruned_G, 
-                                            penwidth=normalize_weight(weight, jacobian, pen_thickness, normalization),
+                                            penwidth=normalize_weight(weight, edge_scale, pen_thickness, normalization),
                                             color = 'red' if weight < 0 else 'blue')
 
     # the cherry on top
     add_node_prune_filter('y', G, pruned_G, shape='diamond', xlabel=ylabel)
     err_idx = nodes[f'resid_{layers-1}'].shape[0]
+    jacobian = edges[f'resid_{layers-1}']['y']
+    edge_scale = float(max(abs(jacobian.values().min()), abs(jacobian.values().max())))
+    
     for idx in nodes_by_submod[f'resid_{layers-1}'].keys():
-        weight = edges[f'resid_{layers-1}']['y'][tuple(idx)].item()
+        weight = jacobian[tuple(idx)].item()
         name = get_name('resid', layers-1, idx, err_idx)
         
-        jacobian = edges[f'resid_{layers-1}']['y']
         add_edge_prune_filter(name, 'y', G, pruned_G,
-                              penwidth=normalize_weight(weight, jacobian, pen_thickness, normalization),
+                              penwidth=normalize_weight(weight, edge_scale, pen_thickness, normalization),
                               color = 'red' if weight < 0 else 'blue')
         
     return G

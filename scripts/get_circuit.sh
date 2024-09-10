@@ -13,10 +13,12 @@ DICT_ID=$8
 DATA_TYPE=$9
 
 
+
 python circuit.py \
     --model $MODEL \
     --num_examples $NUM_EXAMPLE \
     --batch_size 10 \
+    --prune \
     --dataset $DATA \
 	--node_threshold $NODE \
 	--edge_threshold $EDGE \

@@ -160,13 +160,11 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
     resid = resids[layer]
     mlp = mlps[layer]
     attn = attns[layer]
-    # print('starting MR')
+    
     MR_effect, MR_grad = N(mlp, resid, name='MR')
-    # print('starting AR')
     AR_effect, AR_grad = N(attn, resid, name='AR')
-    # print('starting AM')
     AM_effect, AM_grad = N(attn, mlp, name='AM')
-    # print('starting AMR')
+    
     AMR_effect = jvp(
         clean,
         model,
@@ -193,12 +191,9 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         else:
             return
 
-    # print("starting RM")
     RM_effect = N(prev_resid, mlp, return_without_right=False)
-    # print("starting RA")
     RA_effect = N(prev_resid, attn, return_without_right=False)
     
-    print("starting RAM", layer)
     RAM_effect = jvp(
         clean,  # input
         model,  # model
@@ -210,12 +205,10 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         deltas[prev_resid],  # right_vec (start)
         edge_sparsity=edge_threshold,
         shapes=RM_effect.shape
-        # downstream_shape=mlp
     )
 
     RR_effect = N(prev_resid, resid, return_without_right=False)
-    
-    # print("starting RMR")
+
     RMR_effect = jvp(
         clean,     # input
         model,     # model 
@@ -228,7 +221,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         edge_sparsity=edge_threshold,
         shapes=RR_effect.shape
     )
-    # print("starting RAR")
+
     RAR_effect = jvp(
         clean,
         model,
@@ -241,8 +234,6 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
         edge_sparsity=edge_threshold,
         shapes=RR_effect.shape
     )
-
-    # print("starting RR")
 
     edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect - RAM_effect
     edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
@@ -422,7 +413,7 @@ def get_circuit(
 
 
 
-def process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples, disable_tqdm=False):
+def process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples, post_resids, disable_tqdm=False):
     batch_size = args.batch_size
     num_examples = min([args.num_examples, len(examples)])
     n_batches = math.ceil(num_examples / batch_size)
@@ -557,7 +548,10 @@ def process_examples(args, device, model, embed, attns, mlps, resids, dictionari
             annotations=annotations, 
             save_dir=f'{args.plot_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}',
             ylabel=ylabel,
-            seq_len=args.example_length
+            seq_len=args.example_length,
+            normalization=args.normalization,
+            prune=args.prune,
+            post_resids=post_resids
         )
 
 if __name__ == '__main__':
@@ -586,16 +580,23 @@ if __name__ == '__main__':
                         help="Indirect effect threshold for keeping circuit nodes.")
     parser.add_argument('--edge_threshold', type=float, default=0.02,
                         help="Indirect effect threshold for keeping edges.")
-    parser.add_argument('--pen_thickness', type=float, default=1,
+    parser.add_argument('--pen_thickness', type=float, default=0.5,
                         help="Scales the width of the edges in the circuit plot.")
-    
-    dtype_group = parser.add_argument_group('data-type') # Define a data-type argument that must be either nopair, regular, or hf
-    dtype_group.add_argument(
+    parser.add_argument('--prune', default=False, action='store_true', 
+                        help="Prune the circuit to remove edges that are not on a path from input to output.")
+    parser.add_argument(
+        '--normalization',
+        type=str,
+        choices=['log', 'linear'],
+        default='log',
+        help="Specify the normalization type for edge thickness."
+    ) 
+    parser.add_argument(
         '--data_type',
         type=str,
         choices=['nopair', 'regular', 'hf'],
         default='regular',
-        help="Specify the data type. Must be either 'nopair', 'regular', or 'hf'."
+        help="Specify the type of the dataset."
     )
     
     parser.add_argument('--plot_circuit', default=False, action='store_true',
@@ -629,6 +630,7 @@ if __name__ == '__main__':
         resids = [layer for layer in model.transformer.h]
 
     dictionaries = {}
+    post_resids = False
     if args.dict_id == 'id':
         from dictionary_learning.dictionary import IdentityDict
         dictionaries[embed] = IdentityDict(args.d_model)
@@ -653,8 +655,8 @@ if __name__ == '__main__':
                 f"v5_32k_layer_{i}.pt/sae_weights.safetensors",
                 device=device
             )
+        post_resids = True
             
-
     else:
         dictionaries[embed] = AutoEncoder.from_pretrained(
             f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
@@ -692,6 +694,6 @@ if __name__ == '__main__':
         for example in tqdm(examples):
             example_basename = save_basename + f"_{example[0]['document_idx']}"
             
-            process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, example_basename, example, disable_tqdm=True)
+            process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, example_basename, example, post_resids, disable_tqdm=True)
     else:
-        process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples)
+        process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples, post_resids)
