@@ -26,10 +26,12 @@ def _pe_attrib(
 ):
     
     # first run through a test input to figure out which hidden states are tuples
-    is_tuple = {}
+    output_submods = {}
     with model.trace("_"):
         for submodule in submodules:
-            is_tuple[submodule] = type(submodule.output.shape) == tuple
+            output_submods[submodule] = submodule.output.save()
+    
+    is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
     grads = {}
@@ -103,10 +105,12 @@ def _pe_ig(
 ):
     
     # first run through a test input to figure out which hidden states are tuples
-    is_tuple = {}
+    output_submods = {}
     with model.trace("_"):
         for submodule in submodules:
-            is_tuple[submodule] = type(submodule.output.shape) == tuple
+            output_submods[submodule] = submodule.output.save()
+    
+    is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
     with model.trace(clean, **tracer_kwargs), t.no_grad():
@@ -191,10 +195,12 @@ def _pe_exact(
     ):
 
     # first run through a test input to figure out which hidden states are tuples
-    is_tuple = {}
+    output_submods = {}
     with model.trace("_"):
         for submodule in submodules:
-            is_tuple[submodule] = type(submodule.output.shape) == tuple
+            output_submods[submodule] = submodule.output.save()
+    
+    is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
     with model.trace(clean, **tracer_kwargs), t.inference_mode():
@@ -319,10 +325,12 @@ def jvp(
             return t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device), t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device)
 
     # first run through a test input to figure out which hidden states are tuples
-    is_tuple = {}
+    output_submods = {}
     with model.trace("_"):
-        is_tuple[upstream_submod] = type(upstream_submod.output.shape) == tuple
-        is_tuple[downstream_submod] = type(downstream_submod.output.shape) == tuple
+        for submodule in [downstream_submod, upstream_submod]:
+            output_submods[submodule] = submodule.output.save()
+    
+    is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
         
         
     # the +1 is to deal with the fact that we concatenate the resc and the act

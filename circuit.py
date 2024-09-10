@@ -246,7 +246,7 @@ def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dic
 
     edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect - RAM_effect
     edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
-    edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect - (RMR_effect - RAM_effect) - RAR_effect
+    edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect - (RMR_effect) - RAR_effect
     print("layer done", layer)
 
 def get_circuit(
@@ -643,14 +643,14 @@ if __name__ == '__main__':
                 f"v5_128k_layer_{i}/sae_weights.safetensors",
                 device=device
             )
-            dictionaries[mlps[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-mlp-tm",
-                f"blocks.{i}.hook_mlp_out",
+            dictionaries[mlps[i]] = AutoEncoder.from_hf(
+                "jbloom/GPT2-Small-OAI-v5-128k-mlp-out-SAEs",
+                f"v5_128k_layer_{i}/sae_weights.safetensors",
                 device=device
             )
-            dictionaries[resids[i]] = AutoEncoder.from_saelens(
-                "gpt2-small-res-jb",
-                f"blocks.{i}.hook_resid_pre",
+            dictionaries[resids[i]] = AutoEncoder.from_hf(
+                "jbloom/GPT2-Small-OAI-v5-32k-resid-post-SAEs",
+                f"v5_32k_layer_{i}.pt/sae_weights.safetensors",
                 device=device
             )
             
