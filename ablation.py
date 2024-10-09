@@ -10,7 +10,7 @@ def run_with_ablations(
         clean, # clean inputs
         patch, # patch inputs for use in computing ablation values
         model, # a nnsight LanguageModel
-        submodules, # list of submodules 
+        submodules, # list of submodules
         dictionaries, # dictionaries[submodule] is an autoencoder for submodule's output
         nodes, # nodes[submodule] is a boolean SparseAct with True for the nodes to keep (or ablate if complement is True)
         metric_fn, # metric_fn(model, **metric_kwargs) -> t.Tensor
@@ -54,7 +54,7 @@ def run_with_ablations(
 
             f[...,~submod_nodes.act] = patch_states[submodule].act[...,~submod_nodes.act]
             res[...,~submod_nodes.resc] = patch_states[submodule].res[...,~submod_nodes.resc]
-            
+
             if is_tuple:
                 submodule.output[0][:] = dictionary.decode(f) + res
             else:
@@ -66,8 +66,8 @@ def run_with_ablations(
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--threshold', type=float, default=0.1,
-                        help="Node threshold for the circuit.")
+    parser.add_argument('--sparsity', type=float, default=0.1,
+                        help="Node sparsity for the circuit.")
     parser.add_argument('--ablation', type=str, default='mean',
                         help="Ablation style. Can be one of `mean`, `resample`, `zero`.")
     parser.add_argument('--circuit', type=str,
@@ -108,7 +108,7 @@ if __name__ == '__main__':
         submod_names[model.gpt_neox.layers[i].attention] = f'attn_{i}'
         submod_names[model.gpt_neox.layers[i].mlp] = f'mlp_{i}'
         submod_names[model.gpt_neox.layers[i]] = f'resid_{i}'
-    
+
     if args.dict_id != 'id':
         dict_size = args.dict_size
         dictionaries = {}
@@ -133,10 +133,10 @@ if __name__ == '__main__':
     elif args.dict_id == 'id':
         dict_size = 512
         dictionaries = {submod : IdentityDict(dict_size).to(args.device) for submod in submodules}
-    
+
     nodes = t.load(args.circuit)['nodes']
     nodes = {
-        submod : nodes[submod_names[submod]].abs() > args.threshold for submod in submodules
+        submod : nodes[submod_names[submod]].abs() > args.sparsity for submod in submodules
     }
     n_features = sum([n.act.sum().item() for n in nodes.values()])
     n_errs = sum([n.resc.sum().item() for n in nodes.values()])
@@ -153,8 +153,8 @@ if __name__ == '__main__':
             - t.gather(model.embed_out.output[:,-1,:], dim=-1, index=patch_answer_idxs.view(-1, 1)).squeeze(-1) + \
             t.gather(model.embed_out.output[:,-1,:], dim=-1, index=clean_answer_idxs.view(-1, 1)).squeeze(-1)
         )
-    
-    if args.ablation == 'resample': 
+
+    if args.ablation == 'resample':
         def ablation_fn(x):
             idxs = t.multinomial(t.ones(x.act.shape[0]), x.act.shape[0], replacement=True).to(x.act.device)
             return SparseAct(act=x.act[idxs], res=x.res[idxs])

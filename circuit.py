@@ -4,18 +4,21 @@ import json
 import math
 import os
 from collections import defaultdict
-from typing import Dict
 
+import numpy as np
 import torch as t
-from einops import rearrange
 from tqdm import tqdm
-
-from activation_utils import SparseAct
-from attribution import patching_effect, jvp
-from circuit_plotting import plot_circuit, plot_circuit_posaligned
-from dictionary_learning import AutoEncoder
-from loading_utils import load_examples, load_examples_nopair, load_examples_hf
 from nnsight import LanguageModel
+
+from dictionary_learning import AutoEncoder
+from dictionary_learning.dictionary import IdentityDict
+
+from histogram_aggregator import HistAggregator
+from activation_utils import SparseAct
+from attribution import patching_effect, jvp, threshold_effects
+from circuit_plotting import plot_circuit, plot_circuit_posaligned
+from loading_utils import load_examples, load_examples_nopair, load_examples_hf
+from config import Config
 
 
 ###### utilities for dealing with sparse COO tensors ######
@@ -77,168 +80,34 @@ def sparse_mean(x, dim):
         return x.sum(dim=dim) / x.shape[dim]
     else:
         return x.sum(dim=dim) / prod(x.shape[d] for d in dim)
-    
-    
-def agg_sum_sparse_tuples(tuples, dims):
-    dims_downstream = [d for d in dims if d < 3]
-    dims_upstream = [d-3 for d in dims if d >= 3]
-    
-    res_shape = [d for d in tuples[2] if d not in dims]
-    res_values = {}
-    res_ind = {}
-    for feat_idx in tuples[0]:
-        res_values[feat_idx] = tuples[1][feat_idx].sum(dim=dims_upstream)
-        res_ind
-        
-        
-    
+
 
 ######## end sparse tensor utilities ########
 
 
-def compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, 
-                                deltas, unflatten, features_by_submod, edges, N, edge_threshold):
-    resid = resids[layer]
-    mlp = mlps[layer]
-    attn = attns[layer]
+def aggregate_nodes_edges(nodes, edges, dims, divisor_dim=None):
+    for child in edges:
+        for parent in edges[child]:
 
-    MR_effect, MR_grad = N(mlp, resid)
-    AR_effect, AR_grad = N(attn, resid)
+            if divisor_dim is not None:
+                divisor = nodes[child].shape[divisor_dim]
+            else:
+                divisor = 1.
 
-    edges[f'mlp_{layer}'][f'resid_{layer}'] = MR_effect
-    edges[f'attn_{layer}'][f'resid_{layer}'] = AR_effect
+            weight_matrix = edges[child][parent]
+            if weight_matrix.shape[0] == 0:
+                continue
 
-    if layer > 0:
-        prev_resid = resids[layer-1]
-    else:
-        if embed is not None:
-            prev_resid = embed
-        else:
-            return
-
-    RM_effect = N(prev_resid, mlp, return_without_right=False)
-    RA_effect = N(prev_resid, attn, return_without_right=False)
+            if parent == 'y':
+                weight_matrix = weight_matrix.sum(dim=dims[0]) / divisor
+            else:
+                weight_matrix = weight_matrix.sum(dim=dims) / divisor
+            edges[child][parent] = weight_matrix
+    for node in nodes:
+        if node != 'y':
+            nodes[node] = nodes[node].sum(dim=dims[0]) / divisor
 
 
-    RMR_effect = jvp(
-        clean,     # input
-        model,     # model 
-        dictionaries,   # dictionaries
-        mlp,  # downstream submod
-        features_by_submod[resid],  # downstream features
-        prev_resid,   # upstream submod
-        {tuple(feat_idx) : unflatten(MR_grad, feat_idx) for feat_idx in features_by_submod[resid]}, # left_vec
-        deltas[prev_resid],    # right_vec
-        edge_sparsity=edge_threshold
-    )
-    RAR_effect = jvp(
-        clean,
-        model,
-        dictionaries,
-        attn,
-        features_by_submod[resid],
-        prev_resid,
-        {tuple(feat_idx) : unflatten(AR_grad, feat_idx) for feat_idx in features_by_submod[resid]},
-        deltas[prev_resid],
-        edge_sparsity=edge_threshold
-    )
-
-    RR_effect = N(prev_resid, resid, return_without_right=False)
-
-    if layer > 0:    # for the future: infer this from a graph structure
-        edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect
-        edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
-        edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect - RMR_effect - RAR_effect
-    else:
-        edges['embed'][f'mlp_{layer}'] = RM_effect
-        edges['embed'][f'attn_{layer}'] = RA_effect
-        edges['embed'][f'resid_0'] = RR_effect - RMR_effect - RAR_effect
-        
-        
-def compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, 
-                            deltas, unflatten, features_by_submod, edges, N, edge_threshold):
-    resid = resids[layer]
-    mlp = mlps[layer]
-    attn = attns[layer]
-    
-    MR_effect, MR_grad = N(mlp, resid, name='MR')
-    AR_effect, AR_grad = N(attn, resid, name='AR')
-    AM_effect, AM_grad = N(attn, mlp, name='AM')
-    
-    AMR_effect = jvp(
-        clean,
-        model,
-        dictionaries,
-        mlp,
-        features_by_submod[resid],
-        attn,
-        {tuple(feat_idx) : unflatten(MR_grad, feat_idx, mlp) for feat_idx in features_by_submod[resid]},
-        deltas[attn],
-        edge_sparsity=edge_threshold,
-        shapes=AR_effect.shape
-    )
-    
-    edges[f'mlp_{layer}'][f'resid_{layer}'] = MR_effect
-    edges[f'attn_{layer}'][f'resid_{layer}'] = AR_effect - AMR_effect
-    edges[f'attn_{layer}'][f'mlp_{layer}'] = AM_effect
-
-    
-    if layer > 0:
-        prev_resid = resids[layer-1]
-    else:
-        if embed is not None:
-            prev_resid = embed
-        else:
-            return
-
-    RM_effect = N(prev_resid, mlp, return_without_right=False)
-    RA_effect = N(prev_resid, attn, return_without_right=False)
-    
-    RAM_effect = jvp(
-        clean,  # input
-        model,  # model
-        dictionaries,  # dictionaries
-        attn,   # downstream submod (middle)
-        features_by_submod[mlp],  # downstream features (end)
-        prev_resid,  # upstream submod (start)
-        {tuple(feat_idx) : unflatten(AM_grad, feat_idx, attn) for feat_idx in features_by_submod[mlp]},   # left_vec (middle->end)
-        deltas[prev_resid],  # right_vec (start)
-        edge_sparsity=edge_threshold,
-        shapes=RM_effect.shape
-    )
-
-    RR_effect = N(prev_resid, resid, return_without_right=False)
-
-    RMR_effect = jvp(
-        clean,     # input
-        model,     # model 
-        dictionaries,   # dictionaries
-        mlp,  # downstream submod (middle)
-        features_by_submod[resid],  # downstream features (end)
-        prev_resid,   # upstream submod  ( start)
-        {tuple(feat_idx) : unflatten(MR_grad, feat_idx, mlp) for feat_idx in features_by_submod[resid]}, # left_vec (middle->end)
-        deltas[prev_resid],    # right_vec  (start)
-        edge_sparsity=edge_threshold,
-        shapes=RR_effect.shape
-    )
-
-    RAR_effect = jvp(
-        clean,
-        model,
-        dictionaries,
-        attn,
-        features_by_submod[resid],
-        prev_resid,
-        {tuple(feat_idx) : unflatten(AR_grad, feat_idx, attn) for feat_idx in features_by_submod[resid]},
-        deltas[prev_resid],
-        edge_sparsity=edge_threshold,
-        shapes=RR_effect.shape
-    )
-
-    edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect - RAM_effect
-    edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
-    edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect - (RMR_effect) - RAR_effect
-    print("layer done", layer)
 
 def get_circuit(
         clean,
@@ -249,17 +118,15 @@ def get_circuit(
         mlps,
         resids,
         dictionaries,
+        cfg: Config,
+        hist_agg: HistAggregator,
         metric_fn,
         metric_kwargs=dict(),
-        aggregation='sum', # or 'none' for not aggregating across sequence position
-        nodes_only=False,
-        node_threshold=0.1,
-        edge_threshold=0.01,
-        parallel_attn=True
 ):
-    
-    all_submods = ([embed] if embed is not None else []) + [submod for layer_submods in zip(mlps, attns, resids) for submod in layer_submods]
-    
+
+    all_submods = ([embed] if embed is not None else []) + \
+        [submod for layer_submods in zip(mlps, attns, resids) for submod in layer_submods]
+
     # first get the patching effect of everything on y
     effects, deltas, grads, total_effect = patching_effect(
         clean,
@@ -269,31 +136,19 @@ def get_circuit(
         dictionaries,
         metric_fn,
         metric_kwargs=metric_kwargs,
-        method='ig' # get better approximations for early layers by using ig
+        method=cfg.method # get better approximations for early layers by using ig
     )
-    
+
     t.cuda.empty_cache()  # helps a bit with memory management
-    
-    def unflatten(grad, feat_idx, submod):
-        # (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
-        b, s, f = effects[submod].act.shape
-        feat_idx = tuple(feat_idx)
-        indices = grad[0][feat_idx].to(model.device)
-        values = grad[1][feat_idx].to(model.device)
-        shape = grad[2][1]
-        tensor = t.sparse_coo_tensor(indices.T, values, shape, is_coalesced=True).to_dense()
-        # tensor = rearrange(tensor, '(b s x) -> b s x', b=b, s=s)
-        return SparseAct(act=tensor[...,:f], res=tensor[...,f:])
-    
+
     features_by_submod = {}
     for submod in all_submods:
         effect = effects[submod].to_tensor()
-        n_features = effect.numel()
-        k_threshold = int(node_threshold * n_features)
-        topk = effect.abs().flatten().topk(k_threshold)
-        topk_ind = topk.indices[topk.values > 0]
-        features_by_submod[submod] = t.stack(t.unravel_index(topk_ind, effect.shape), dim=1).tolist()
-      # submodule -> list of indices
+        if cfg.collect_hists > 0:
+            hist_agg.compute_node_hist(submod, effect)
+        features_by_submod[submod] = threshold_effects(effect, cfg.node_sparsity, cfg.as_threshold)
+
+    # submodule -> list of indices
 
     n_layers = len(resids)
 
@@ -305,8 +160,8 @@ def get_circuit(
         nodes[f'mlp_{i}'] = effects[mlps[i]]
         nodes[f'resid_{i}'] = effects[resids[i]]
 
-    if nodes_only:
-        if aggregation == 'sum':
+    if cfg.nodes_only:
+        if cfg.aggregation == 'sum':
             for k in nodes:
                 if k != 'y':
                     nodes[k] = nodes[k].sum(dim=1)
@@ -316,7 +171,7 @@ def get_circuit(
     edges = defaultdict(lambda:{})
     edges[f'resid_{len(resids)-1}'] = { 'y' : effects[resids[-1]].to_tensor().to_sparse() }
 
-    def N(upstream, downstream, return_without_right=True, name=None):
+    def N(upstream, downstream, return_without_right=True, intermediate_stop_grads=None):
         return jvp(
             clean,
             model,
@@ -326,185 +181,78 @@ def get_circuit(
             upstream,   # upstream submod
             grads[downstream],  # left_vec
             deltas[upstream],   # right_vec
+            cfg,
             return_without_right=return_without_right,
-            edge_sparsity=edge_threshold,
-            name=name
+            intermediate_stop_grads=intermediate_stop_grads
         )
 
-
     # now we work backward through the model to get the edges
-    # max_abs = 0.0
     for layer in reversed(range(len(resids))):
-        if parallel_attn:
-            compute_edges_parallel_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten ,features_by_submod, edges, N, edge_threshold)
+        resid = resids[layer]
+        mlp = mlps[layer]
+        attn = attns[layer]
+
+        MR_effect = N(mlp, resid)
+        AR_effect = N(attn, resid, [mlp])
+
+
+        edges[f'mlp_{layer}'][f'resid_{layer}'] = MR_effect
+        edges[f'attn_{layer}'][f'resid_{layer}'] = AR_effect
+
+        if cfg.parallel_attn:
+            AM_effect = N(attn, mlp)
+            edges[f'attn_{layer}'][f'mlp_{layer}'] = AM_effect
+
+
+        if layer > 0:
+            prev_resid = resids[layer-1]
         else:
-            compute_edges_seqn_attn(layer, clean, model, embed, attns, mlps, resids, dictionaries, deltas, unflatten, features_by_submod, edges, N, edge_threshold)
-        # print('layer complete!', layer)
-    # if max_abs > 0:
-    #     print("Detected non-zero RMR effects!")
-    # rearrange weight matrices
-    # for child in edges:
-    #     # get shape for child
-    #     bc, sc, fc = nodes[child].act.shape
-    #     for parent in edges[child]:
-    #         weight_matrix = edges[child][parent]
-    #         if parent == 'y':
-    #             weight_matrix = sparse_reshape(weight_matrix, (bc, sc, fc+1))
-    #         else:
-    #             bp, sp, fp = nodes[parent].act.shape
-    #             assert bp == bc
-    #             weight_matrix = sparse_reshape(weight_matrix, (bp, sp, fp+1, bc, sc, fc+1))
-    #         edges[child][parent] = weight_matrix
-    
-    if aggregation == 'sum':
+            if embed is not None:
+                prev_resid = embed
+            else:
+                return
+
+        RM_effect = N(prev_resid, mlp, [attn])
+        RA_effect = N(prev_resid, attn)
+        RR_effect = N(prev_resid, resid, [mlp, attn])
+
+        edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect
+        edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
+        edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect
+        print("layer done", layer)
+
+    if cfg.aggregation == 'sum':
         # aggregate across sequence position
-        for child in edges:
-            for parent in edges[child]:
-                weight_matrix = edges[child][parent]
-                if parent == 'y':
-                    weight_matrix = weight_matrix.sum(dim=1)
-                else:
-                    weight_matrix = weight_matrix.sum(dim=(1, 4))
-                edges[child][parent] = weight_matrix
-        for node in nodes:
-            if node != 'y':
-                nodes[node] = nodes[node].sum(dim=1)
-
+        aggregate_nodes_edges(nodes, edges, (1, 4))
         # aggregate across batch dimension
-        for child in edges:
-            bc, fc = nodes[child].act.shape
-            for parent in edges[child]:
-                weight_matrix = edges[child][parent]
-                if parent == 'y':
-                    weight_matrix = weight_matrix.sum(dim=0) / bc
-                else:
-                    bp, fp = nodes[parent].act.shape
-                    assert bp == bc
-                    weight_matrix = weight_matrix.sum(dim=(0,2)) / bc
-                edges[child][parent] = weight_matrix
-        for node in nodes:
-            if node != 'y':
-                nodes[node] = nodes[node].mean(dim=0)
-    
-    elif aggregation == 'none':
+        aggregate_nodes_edges(nodes, edges, (0, 2), divisor_dim=0)
 
+    elif cfg.aggregation == 'none':
         # aggregate across batch dimensions
-        for child in edges:
-            # get shape for child
-            bc, sc, fc = nodes[child].act.shape
-            for parent in edges[child]:
-                weight_matrix = edges[child][parent]
-                if parent == 'y':
-                    weight_matrix = sparse_reshape(weight_matrix, (bc, sc, fc+1))
-                    weight_matrix = weight_matrix.sum(dim=0) / bc
-                else:
-                    bp, sp, fp = nodes[parent].act.shape
-                    assert bp == bc
-                    weight_matrix = sparse_reshape(weight_matrix, (bp, sp, fp+1, bc, sc, fc+1))
-                    weight_matrix = weight_matrix.sum(dim=(0, 3)) / bc
-                edges[child][parent] = weight_matrix
-        for node in nodes:
-            nodes[node] = nodes[node].mean(dim=0)
+        aggregate_nodes_edges(nodes, edges, (0, 3), divisor_dim=0)
 
     else:
-        raise ValueError(f"Unknown aggregation: {aggregation}")
+        raise ValueError(f"Unknown aggregation: {cfg.aggregation}")
 
     return nodes, edges
 
 
 
-def process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples, post_resids, disable_tqdm=False):
-    batch_size = args.batch_size
-    num_examples = min([args.num_examples, len(examples)])
+def process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, examples, cfg: Config, hist_agg: HistAggregator):
+    batch_size = cfg.batch_size
+    num_examples = min([cfg.num_examples, len(examples)])
     n_batches = math.ceil(num_examples / batch_size)
     batches = [
         examples[batch*batch_size:(batch+1)*batch_size] for batch in range(n_batches)
     ]
-    if num_examples < args.num_examples and not disable_tqdm: # warn the user
-        print(f"Total number of examples is less than {args.num_examples}. Using {num_examples} examples instead.")
+    if num_examples < cfg.num_examples and not cfg.disable_tqdm: # warn the user
+        print(f"Total number of examples is less than {cfg.num_examples}. Using {num_examples} examples instead.")
 
-    if not args.plot_only:
-        running_nodes = None
-        running_edges = None
-
-        for batch in tqdm(batches, desc="Batches", disable=disable_tqdm):
-            clean_inputs = t.cat([e['clean_prefix'] for e in batch], dim=0).to(device)
-            clean_answer_idxs = t.tensor([e['clean_answer'] for e in batch], dtype=t.long, device=device)
-            if args.model == 'gpt2':
-                model_out = model.lm_head
-            else:
-                model_out = model.embed_out
-
-            if args.data_type in ['nopair', 'hf']:
-                patch_inputs = None
-                def metric_fn(model):
-                    return (
-                        -1 * t.gather(
-                            t.nn.functional.log_softmax(model_out.output[:,-1,:], dim=-1), dim=-1, index=clean_answer_idxs.view(-1, 1)
-                        ).squeeze(-1)
-                    )
-            else:
-                patch_inputs = t.cat([e['patch_prefix'] for e in batch], dim=0).to(device)
-                patch_answer_idxs = t.tensor([e['patch_answer'] for e in batch], dtype=t.long, device=device)
-                def metric_fn(model):
-                    return (
-                        t.gather(model_out.output[:,-1,:], dim=-1, index=patch_answer_idxs.view(-1, 1)).squeeze(-1) - \
-                        t.gather(model_out.output[:,-1,:], dim=-1, index=clean_answer_idxs.view(-1, 1)).squeeze(-1)
-                    )
-                
-            if args.model == "gpt2":
-                parallel_attn = False
-            else:
-                parallel_attn = True
-            
-            nodes, edges = get_circuit(
-                clean_inputs,
-                patch_inputs,
-                model,
-                embed,
-                attns,
-                mlps,
-                resids,
-                dictionaries,
-                metric_fn,
-                nodes_only=args.nodes_only,
-                aggregation=args.aggregation,
-                node_threshold=args.node_threshold,
-                edge_threshold=args.edge_threshold,
-                parallel_attn=parallel_attn
-            )
-
-            if running_nodes is None:
-                running_nodes = {k : len(batch) * nodes[k].to('cpu') for k in nodes.keys() if k != 'y'}
-                if not args.nodes_only: running_edges = { k : { kk : len(batch) * edges[k][kk].to('cpu') for kk in edges[k].keys() } for k in edges.keys()}
-            else:
-                for k in nodes.keys():
-                    if k != 'y':
-                        running_nodes[k] += len(batch) * nodes[k].to('cpu')
-                if not args.nodes_only:
-                    for k in edges.keys():
-                        for v in edges[k].keys():
-                            running_edges[k][v] += len(batch) * edges[k][v].to('cpu')
-            
-            # memory cleanup
-            del nodes, edges
-            gc.collect()
-
-        nodes = {k : v.to(device) / num_examples for k, v in running_nodes.items()}
-        if not args.nodes_only: 
-            edges = {k : {kk : 1/num_examples * v.to(device) for kk, v in running_edges[k].items()} for k in running_edges.keys()}
-        else: edges = None
-
-        save_dict = {
-            "examples" : examples,
-            "nodes": nodes,
-            "edges": edges
-        }
-        with open(f'{args.circuit_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}.pt', 'wb') as outfile:
-            t.save(save_dict, outfile)
-
+    if not cfg.plot_only:
+        nodes, edges = compute_circuit(model, embed, attns, mlps, resids, dictionaries,
+                                       example_basename, examples, cfg, num_examples, batches, hist_agg)
     else:
-        with open(f'{args.circuit_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}.pt', 'rb') as infile:
+        with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'rb') as infile:
             save_dict = t.load(infile)
         nodes = save_dict['nodes']
         edges = save_dict['edges']
@@ -516,43 +264,102 @@ def process_examples(args, device, model, embed, attns, mlps, resids, dictionari
             for annotation_line in annotations_data:
                 annotation = json.loads(annotation_line)
                 annotations[annotation["Name"]] = annotation["Annotation"]
-    except:
+    except FileNotFoundError:
         annotations = None
 
-    if args.aggregation == "none":
-        example = model.tokenizer.batch_decode(examples[0]["clean_prefix"])[0]
-        plot_circuit_posaligned(
-            nodes, 
-            edges,
-            layers=len(model.gpt_neox.layers), 
-            length=args.example_length,
-            example_text=example,
-            node_threshold=args.node_threshold, 
-            edge_threshold=args.edge_threshold, 
-            pen_thickness=args.pen_thickness, 
-            annotations=annotations, 
-            save_dir=f'{args.plot_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}'
-        )
-    else:
-        ylabel = None
-        if args.data_type == 'hf':
-            ylabel = ''.join(model.tokenizer.decode(examples[0]['clean_prefix'][0])) + ' -> ' + model.tokenizer.decode([examples[0]['clean_answer']])
-            
-        plot_circuit(
-            nodes, 
-            edges,
-            layers=len(attns),   # assume we include attns at all layers
-            node_threshold=args.node_threshold, 
-            edge_threshold=args.edge_threshold, 
-            pen_thickness=args.pen_thickness, 
-            annotations=annotations, 
-            save_dir=f'{args.plot_dir}/{save_basename}_dict{args.dict_id}_node{args.node_threshold}_edge{args.edge_threshold}_n{num_examples}_agg{args.aggregation}',
-            ylabel=ylabel,
-            seq_len=args.example_length,
-            normalization=args.normalization,
-            prune=args.prune,
-            post_resids=post_resids
-        )
+
+    example_text = None
+    if cfg.data_type == 'hf':
+        example_text = ''.join(model.tokenizer.decode(examples[0]['clean_prefix'][0])) + ' -> ' + model.tokenizer.decode([examples[0]['clean_answer']])
+    elif cfg.aggregation == "none":
+        example_text = model.tokenizer.batch_decode(examples[0]["clean_prefix"])[0]
+
+    if cfg.collect_hists == 0:
+        plot_circuit(nodes,
+                    edges,
+                    annotations,
+                    cfg,
+                    example_text,
+                    save_path=f'{args.plot_dir}/{example_basename}_{cfg.as_fname()}'
+                    )
+
+def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_basename, examples, cfg: Config, num_examples, batches):
+    running_nodes = None
+    running_edges = None
+
+    for batch in tqdm(batches, desc="Batches", disable=cfg.disable_tqdm):
+        clean_inputs = t.cat([e['clean_prefix'] for e in batch], dim=0).to(cfg.device)
+        clean_answer_idxs = t.tensor([e['clean_answer'] for e in batch], dtype=t.long, device=cfg.device)
+        if cfg.model == 'gpt2':
+            model_out = model.lm_head
+        else:
+            model_out = model.embed_out
+
+        if cfg.data_type in ['nopair', 'hf']:
+            patch_inputs = None
+            def metric_fn(model):
+                return (
+                        -1 * t.gather(
+                            t.nn.functional.log_softmax(model_out.output[:,-1,:], dim=-1), dim=-1, index=clean_answer_idxs.view(-1, 1)
+                        ).squeeze(-1)
+                    )
+        else:
+            patch_inputs = t.cat([e['patch_prefix'] for e in batch], dim=0).to(cfg.device)
+            patch_answer_idxs = t.tensor([e['patch_answer'] for e in batch], dtype=t.long, device=cfg.device)
+            def metric_fn(model):
+                return (
+                        t.gather(model_out.output[:,-1,:], dim=-1, index=patch_answer_idxs.view(-1, 1)).squeeze(-1) - \
+                        t.gather(model_out.output[:,-1,:], dim=-1, index=clean_answer_idxs.view(-1, 1)).squeeze(-1)
+                    )
+
+        nodes, edges = get_circuit(
+                clean_inputs,
+                patch_inputs,
+                model,
+                embed,
+                attns,
+                mlps,
+                resids,
+                dictionaries,
+                cfg,
+                hist_agg,
+                metric_fn,
+                metric_kwargs=dict(),
+            )
+
+        if running_nodes is None:
+            running_nodes = {k : len(batch) * nodes[k].to('cpu') for k in nodes.keys() if k != 'y'}
+            if not cfg.nodes_only:
+                running_edges = { k : { kk : len(batch) * edges[k][kk].to('cpu') for kk in edges[k].keys() } for k in edges.keys()}
+        else:
+            for k in nodes.keys():
+                if k != 'y':
+                    running_nodes[k] += len(batch) * nodes[k].to('cpu')
+            if not cfg.nodes_only:
+                for k in edges.keys():
+                    for v in edges[k].keys():
+                        running_edges[k][v] += len(batch) * edges[k][v].to('cpu')
+
+            # memory cleanup
+        del nodes, edges
+        gc.collect()
+
+    nodes = {k : v.to(cfg.device) / num_examples for k, v in running_nodes.items()}
+    if not cfg.nodes_only:
+        edges = {k : {kk : 1/num_examples * v.to(cfg.device) for kk, v in running_edges[k].items()} for k in running_edges.keys()}
+    else: edges = None
+
+    save_dict = {
+            "examples" : examples,
+            "nodes": nodes,
+            "edges": edges
+        }
+    if cfg.collect_hists == 0:
+        with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'wb') as outfile:
+            t.save(save_dict, outfile)
+
+    return nodes, edges
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -576,21 +383,27 @@ if __name__ == '__main__':
                         help="Number of examples to process at once when running circuit discovery.")
     parser.add_argument('--aggregation', type=str, default='sum',
                         help="Aggregation across token positions. Should be one of `sum` or `none`.")
-    parser.add_argument('--node_threshold', type=float, default=0.2,
-                        help="Indirect effect threshold for keeping circuit nodes.")
-    parser.add_argument('--edge_threshold', type=float, default=0.02,
-                        help="Indirect effect threshold for keeping edges.")
+    parser.add_argument('--node_sparsity', type=float, default=0.2,
+                        help="Indirect effect sparsity for keeping circuit nodes.")
+    parser.add_argument('--edge_sparsity', type=float, default=0.02,
+                        help="Indirect effect sparsity for keeping edges.")
+    parser.add_argument('--as_threshold', default=False, action='store_true',
+                        help="Whether to treat node_sparsity and edge_sparsity as thresholds rather than sparsity levels.")
     parser.add_argument('--pen_thickness', type=float, default=0.5,
                         help="Scales the width of the edges in the circuit plot.")
-    parser.add_argument('--prune', default=False, action='store_true', 
-                        help="Prune the circuit to remove edges that are not on a path from input to output.")
+    parser.add_argument('--collect_hists', default=0, type=int,
+                        help="Collect histograms of edge and node weights for the first collect_hists examples rather"
+                             " than compute circuits. 0 to disable.")
+    parser.add_argument('--prune_method', type=str, default='none',
+                        choices=['none', 'source-sink', 'sink-backwards', 'first-layer-sink'],
+                        help="Pruning method for the finished circuit (see circuit_plotting.build_pruned_graph)")
     parser.add_argument(
-        '--normalization',
+        '--edge_thickness_normalization',
         type=str,
         choices=['log', 'linear'],
         default='log',
         help="Specify the normalization type for edge thickness."
-    ) 
+    )
     parser.add_argument(
         '--data_type',
         type=str,
@@ -598,7 +411,7 @@ if __name__ == '__main__':
         default='regular',
         help="Specify the type of the dataset."
     )
-    
+
     parser.add_argument('--plot_circuit', default=False, action='store_true',
                         help="Plot the circuit after discovering it.")
     parser.add_argument('--nodes_only', default=False, action='store_true',
@@ -613,12 +426,14 @@ if __name__ == '__main__':
     parser.add_argument('--device', type=str, default='cuda:0')
     args = parser.parse_args()
 
+    cfg = Config()
+    cfg.update(args)
 
-    device = args.device
+    device = cfg.device
 
-    model = LanguageModel(args.model, device_map=device, dispatch=True)
+    model = LanguageModel(cfg.model, device_map=device, dispatch=True)
 
-    if args.model != 'gpt2':
+    if cfg.model != 'gpt2':
         embed = model.gpt_neox.embed_in
         attns = [layer.attention for layer in model.gpt_neox.layers]
         mlps = [layer.mlp for layer in model.gpt_neox.layers]
@@ -630,19 +445,22 @@ if __name__ == '__main__':
         resids = [layer for layer in model.transformer.h]
 
     dictionaries = {}
-    post_resids = False
-    if args.dict_id == 'id':
-        from dictionary_learning.dictionary import IdentityDict
-        dictionaries[embed] = IdentityDict(args.d_model)
+    hists = {}
+
+    if cfg.dict_id == 'id':
+        dictionaries[embed] = IdentityDict(cfg.d_model)
         for i in range(len(model.gpt_neox.layers)):
-            dictionaries[attns[i]] = IdentityDict(args.d_model)
-            dictionaries[mlps[i]] = IdentityDict(args.d_model)
-            dictionaries[resids[i]] = IdentityDict(args.d_model)
-    elif args.dict_id == 'gpt':
+            dictionaries[resids[i]] = IdentityDict(cfg.d_model)
+            dictionaries[mlps[i]] = IdentityDict(cfg.d_model)
+            dictionaries[attns[i]] = IdentityDict(cfg.d_model)
+
+    elif cfg.dict_id == 'gpt2':
+        cfg.resid_posn = 'post'
+        cfg.parallel_attn = False
         for i in range(len(model.transformer.h)):
-            dictionaries[attns[i]] = AutoEncoder.from_hf(
-                "jbloom/GPT2-Small-OAI-v5-128k-attn-out-SAEs",
-                f"v5_128k_layer_{i}/sae_weights.safetensors",
+            dictionaries[resids[i]] = AutoEncoder.from_hf(
+                "jbloom/GPT2-Small-OAI-v5-32k-resid-post-SAEs",
+                f"v5_32k_layer_{i}.pt/sae_weights.safetensors",
                 device=device
             )
             dictionaries[mlps[i]] = AutoEncoder.from_hf(
@@ -650,32 +468,33 @@ if __name__ == '__main__':
                 f"v5_128k_layer_{i}/sae_weights.safetensors",
                 device=device
             )
-            dictionaries[resids[i]] = AutoEncoder.from_hf(
-                "jbloom/GPT2-Small-OAI-v5-32k-resid-post-SAEs",
-                f"v5_32k_layer_{i}.pt/sae_weights.safetensors",
+            dictionaries[attns[i]] = AutoEncoder.from_hf(
+                "jbloom/GPT2-Small-OAI-v5-128k-attn-out-SAEs",
+                f"v5_128k_layer_{i}/sae_weights.safetensors",
                 device=device
             )
-        post_resids = True
-            
     else:
+        cfg.parallel_attn = True
+        cfg.resid_posn = 'post'
         dictionaries[embed] = AutoEncoder.from_pretrained(
             f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
             device=device
         )
+
         for i in range(len(model.gpt_neox.layers)):
-            dictionaries[attns[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+            dictionaries[resids[i]] = AutoEncoder.from_pretrained(
+                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
                 device=device
             )
             dictionaries[mlps[i]] = AutoEncoder.from_pretrained(
                 f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
                 device=device
             )
-            dictionaries[resids[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+            dictionaries[attns[i]] = AutoEncoder.from_pretrained(
+                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
                 device=device
             )
-    
+
     if args.data_type == 'nopair':
         save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
         examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
@@ -689,11 +508,15 @@ if __name__ == '__main__':
     elif args.data_type == 'hf':
         save_basename = args.dataset.replace('/', '_')
         examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
-    
+
+    hist_agg = HistAggregator(cfg.example_length)
+
     if args.data_type == 'hf':
-        for example in tqdm(examples):
+        for i ,example in tqdm(enumerate(examples)):
             example_basename = save_basename + f"_{example[0]['document_idx']}"
-            
-            process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, example_basename, example, post_resids, disable_tqdm=True)
+
+            process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
+            if i > cfg.collect_hists:
+                hist_agg.save(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.hist.pt')
     else:
-        process_examples(args, device, model, embed, attns, mlps, resids, dictionaries, save_basename, examples, post_resids)
+        process_examples(model, embed, attns, mlps, resids, dictionaries, save_basename, examples, cfg, hist_agg)

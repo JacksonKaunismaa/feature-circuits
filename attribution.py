@@ -3,8 +3,11 @@ import torch as t
 from tqdm import tqdm
 from numpy import ndindex
 from typing import Dict, Union
-from activation_utils import SparseAct
 import torch
+
+from config import Config
+from histogram_aggregator import HistAggregator
+from activation_utils import SparseAct
 
 DEBUGGING = False
 
@@ -24,13 +27,13 @@ def _pe_attrib(
         metric_fn,
         metric_kwargs=dict(),
 ):
-    
+
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
     with model.trace("_"):
         for submodule in submodules:
             output_submods[submodule] = submodule.output.save()
-    
+
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
@@ -90,7 +93,7 @@ def _pe_attrib(
             deltas[submodule] = delta
             grads[submodule] = grad
         total_effect = total_effect if total_effect is not None else None
-    
+
     return EffectOut(effects, deltas, grads, total_effect)
 
 def _pe_ig(
@@ -103,13 +106,13 @@ def _pe_ig(
         steps=10,
         metric_kwargs=dict(),
 ):
-    
+
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
     with model.trace("_"):
         for submodule in submodules:
             output_submods[submodule] = submodule.output.save()
-    
+
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
@@ -199,7 +202,7 @@ def _pe_exact(
     with model.trace("_"):
         for submodule in submodules:
             output_submods[submodule] = submodule.output.save()
-    
+
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
     hidden_states_clean = {}
@@ -244,7 +247,7 @@ def _pe_exact(
         clean_state = hidden_states_clean[submodule]
         patch_state = hidden_states_patch[submodule]
         effect = SparseAct(act=t.zeros_like(clean_state.act), resc=t.zeros(*clean_state.res.shape[:-1])).to(model.device)
-        
+
         # iterate over positions and features for which clean and patch differ
         idxs = t.nonzero(patch_state.act - clean_state.act)
         for idx in tqdm(idxs):
@@ -272,12 +275,13 @@ def _pe_exact(
                         submodule.output = x_hat + res
                     metric = metric_fn(model).save()
                 effect.resc[tuple(idx)] = (metric.value - metric_clean.value).sum()
-        
+
         effects[submodule] = effect
         deltas[submodule] = patch_state - clean_state
     total_effect = total_effect if total_effect is not None else None
 
     return EffectOut(effects, deltas, None, total_effect)
+
 
 def patching_effect(
         clean,
@@ -298,7 +302,43 @@ def patching_effect(
         return _pe_exact(clean, patch, model, submodules, dictionaries, metric_fn)
     else:
         raise ValueError(f"Unknown method {method}")
-    
+
+
+def threshold_effects(effect: t.Tensor, threshold: float, as_threshold: bool, stack=True, k_sparsity: int | None =None):
+    """
+    Return the indices of the top-k features with the highest absolute effect, or if as_threshold is True, the indices
+    of the features with absolute effect greater than threshold.
+
+    Args:
+        effect: tensor to apply threshold to
+        threshold: threshold value (or sparsity value)
+        as_threshold: whether to treat `threshold` as a threshold or a sparsity value
+        stack: whether to stack the indices into a tensor. Only has effect if as_threshold is False
+        k_sparsity: if not None, the number of features to return (otherwise, calculated from `effect` and `threshold`)
+
+    Returns:
+        if stack == False:
+            indices: indices of the top-k features
+            values: values of the top-k
+        else:
+            indices: indices of the top-k features, stacked into a tensor, and then .tolist()'d
+    """
+    if as_threshold:
+        ind = t.nonzero(effect.flatten().abs() > threshold).flatten()
+        if stack:
+            return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()
+        return ind, effect.flatten()[ind]
+
+    else:  # as_sparsity
+        if k_sparsity is None:
+            n_features = effect.numel()
+            k_sparsity = int(threshold * n_features)
+        topk = effect.abs().flatten().topk(k_sparsity)
+        topk_ind = topk.indices[topk.values > 0]
+        if stack:
+            return t.stack(t.unravel_index(topk_ind, effect.shape), dim=1).tolist()
+        return topk_ind, topk.values[topk.values > 0]
+
 
 def jvp(
         input,
@@ -309,49 +349,43 @@ def jvp(
         upstream_submod,
         left_vec : Union[SparseAct, Dict[int, SparseAct]],
         right_vec : SparseAct,
-        return_without_right = False,
-        edge_sparsity=0.0005,
-        name=None,
-        shapes=None
+        hist_agg: HistAggregator,
+        cfg: Config,
+        intermediate_stop_grads=None,
+        shapes=None,
 ):
     """
     Return a sparse shape [# downstream features + 1, # upstream features + 1] tensor of Jacobian-vector products.
     """
 
+    if intermediate_stop_grads is None:
+        intermediate_stop_grads = []
+
     if not downstream_features: # handle empty list
-        if not return_without_right:
-            return t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device)
-        else:
-            return t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device), t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device)
+        return t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device), t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device)
 
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
     with model.trace("_"):
-        for submodule in [downstream_submod, upstream_submod]:
+        for submodule in [downstream_submod, upstream_submod] + intermediate_stop_grads:
             output_submods[submodule] = submodule.output.save()
-    
+
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
-        
-        
-    # the +1 is to deal with the fact that we concatenate the resc and the act
-    n_enc = dictionaries[upstream_submod].encoder.out_features
-    numel_per_batch = n_enc * input.shape[1]
-    # numel_per_batch = input.shape[1] * numel_per_batch_seq
-    # seq_len = input.shape[1]
-    k_threshold = int(edge_sparsity * numel_per_batch)
-    print('feat', len(downstream_features), input.shape[1])
-    print('\tthresh', k_threshold)
-    # batch_ind = torch.arange(input.shape[0]).view(-1, 1, 1) * numel_per_batch
-    # seq_ind = torch.arange(seq_len).view(1, -1, 1) * numel_per_batch_seq
-    # flat_index_add = batch_ind + seq_ind
+
+
+    if cfg.as_threshold:
+        k_sparsity = None
+    else:
+        n_enc = dictionaries[upstream_submod].encoder.out_features
+        numel_per_batch = n_enc * input.shape[1]
+        k_sparsity = int(cfg.edge_sparsity * numel_per_batch)
+        print('feat', len(downstream_features), input.shape[1])
+        print('\tthresh', k_sparsity)
 
     downstream_dict, upstream_dict = dictionaries[downstream_submod], dictionaries[upstream_submod]
 
     vjv_indices = {}
     vjv_values = {}
-    if return_without_right:
-        vj_indices = {}
-        vj_values = {}
 
     with model.trace(input, **tracer_kwargs):
         # first specify forward pass modifications
@@ -372,92 +406,50 @@ def jvp(
         y_res = y - y_hat
         downstream_act = SparseAct(act=g, res=y_res).save()
 
-        if isinstance(left_vec, SparseAct):
-            # left_vec is downstream grads (\nabla_d m)
-            # to backprop is (\nabl_d m) @ d (in eq 5)
-            downstream_grads_times_acts = (left_vec @ downstream_act).to_tensor()#.flatten()
-            def to_backprop(feat): 
-                return downstream_grads_times_acts[feat] # should be nabla_d metric @ d
-        elif isinstance(left_vec, dict):
-            def to_backprop(feat):
-                downstream_grads_via_feat = left_vec[feat]
-                # print(feat, 'act', left_vec[feat].act.nonzero().sum().item(), left_vec[feat].act.sum().item(),
-                #       left_vec[feat].res.nonzero().sum().item(), left_vec[feat].res.sum().item())
-                # this is (\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) @ m_bar  (in eq 6)
-                downstream_grads_via_feat_times_acts = (downstream_grads_via_feat @ downstream_act)
-                # sum over downstream features
-                return downstream_grads_via_feat_times_acts.to_tensor().sum()
+        to_backprops = (left_vec @ downstream_act).to_tensor()#.flatten()
 
         for downstream_feat in downstream_features:
             downstream_feat = tuple(downstream_feat)
-            # or in eq 6: \nabla_u {(\nabla_d m * \nabla_{m_bar} d * (m_bar_patch - m_bar_clean)) * m_bar} 
-            #             * (u_patch - u_clean)
-            vjv = (upstream_act.grad @ right_vec).to_tensor()#.flatten()  # eq 5 is vjv
-            if return_without_right:
-                vj = upstream_act.grad.to_tensor()#.flatten()
+            for submod in intermediate_stop_grads:
+                if is_tuple[submod]:
+                    submod.output[0].grad = t.zeros_like(submod.output[0])
+                else:
+                    submod.output.grad = t.zeros_like(submod.output)
+
             x_res.grad = t.zeros_like(x_res)
-            # when doing eq 6, this indexes into an m_bar grad? downstream_feat corresponds to d
 
-            to_backprop(downstream_feat).backward(retain_graph=True)
-            
+            vjv = (upstream_act.grad @ right_vec).to_tensor() # eq 5 is vjv
+            to_backprops[downstream_feat].backward(retain_graph=True)
 
-            # vjv_ind = vjv.nonzero().squeeze(-1).save()
-            # vjv_indices[downstream_feat] = vjv_ind
-            # vjv_values[downstream_feat] = vjv[vjv_ind[:,0], vjv_ind[:,1], vjv_ind[:,2]].save()
-            # vjv_save = vjv.save()
-            vjv_topk = vjv.flatten().topk(k_threshold)
-            
-            nz_topk = vjv_topk.values.nonzero().squeeze(-1)  # filter out zeros
-            vjv_topk_ind = vjv_topk.indices[nz_topk]
-            vjv_topk_val = vjv_topk.values[nz_topk]
-            
-            vjv_indices[downstream_feat] = vjv_topk_ind.save()#(vjv_topk.indices * flat_index_mul)
-            vjv_values[downstream_feat] = vjv_topk_val.save()
-            
-            if return_without_right:
-                vj_ind = vj.nonzero().squeeze(-1).save()
-                vj_indices[downstream_feat] = vj_ind
-                vj_values[downstream_feat] = vj[vj_ind[:,0], vj_ind[:,1], vj_ind[:,2]].save()
+            if cfg.collect_hists > 0:
+                hist_agg.compute_edge_hist(upstream_submod, downstream_submod, vjv)
 
-    # construct return values   
-    # print(vjv_indices[downstream_feat])
+            vjv_ind, vjv_val = threshold_effects(vjv, cfg.edge_sparsity,
+                                                 cfg.as_threshold,
+                                                 k_sparsity=k_sparsity,
+                                                 stack=False)
 
+            vjv_indices[downstream_feat] = vjv_ind.save()#(vjv_topk.indices * flat_index_mul)
+            vjv_values[downstream_feat] = vjv_val.save()
+
+    # construct return values
 
     ## get shapes
     d_downstream_contracted = ((downstream_act.value @ downstream_act.value).to_tensor()).shape
     d_upstream_contracted = ((upstream_act.value @ upstream_act.value).to_tensor()).shape
-    if return_without_right:
-        d_upstream = (upstream_act.value.to_tensor()).shape
-        
+
     if shapes is not None:
         d_downstream_contracted, d_upstream_contracted = shapes[:3], shapes[3:]
-    
-    print('\tnnz', sum([vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features]))
+
+    print('\tnnz', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
     ## make tensors
-    downstream_indices = t.tensor([downstream_feat for downstream_feat in downstream_features 
+    downstream_indices = t.tensor([downstream_feat for downstream_feat in downstream_features
                                 for _ in vjv_indices[tuple(downstream_feat)].value], device=model.device).T
-    # print(downstream_indices.shape)
     upstream_indices = t.cat([t.stack(t.unravel_index(vjv_indices[tuple(downstream_feat)].value, d_upstream_contracted), dim=1)
                               for downstream_feat in downstream_features], dim=0).T
-    # print(downstream_indices.shape, upstream_indices.shape)
     vjv_indices = t.cat([downstream_indices, upstream_indices], dim=0).to(model.device)
     vjv_values = t.cat([vjv_values[tuple(downstream_feat)].value for downstream_feat in downstream_features], dim=0)
-    # print(vjv_values.shape, upstream_act.value.shape, d_downstream_contracted, d_upstream_contracted, d_upstream,
-    #       upstream_act.value.res.shape, upstream_act.value.act.shape)
-    if not return_without_right:
-        return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted))
-        
-    
-    # vj_indices = t.tensor(
-    #     [[downstream_feat for downstream_feat in downstream_features for _ in vj_indices[downstream_feat].value],
-    #     t.cat([vj_indices[downstream_feat].value for downstream_feat in downstream_features], dim=0)],
-    # device=model.device)
-    # 1+1
-    # vj_values = t.cat([vj_values[downstream_feat].value for downstream_feat in downstream_features], dim=0)
 
     return (
         t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted)),
-        # t.sparse_coo_tensor(vj_indices, vj_values, (d_downstream_contracted, d_upstream))
-        # (vjv_indices, vjv_values, (d_downstream_contracted, d_upstream_contracted)),
-        (vj_indices, vj_values, (d_downstream_contracted, d_upstream))
     )

@@ -55,7 +55,7 @@ def load_examples(dataset, num_examples, model, seed=12, pad_to_length=None, len
             # left padding: reverse, right-pad, reverse
             clean_prefix = t.flip(F.pad(t.flip(clean_prefix, (1,)), (0, pad_length), value=model.tokenizer.pad_token_id), (1,))
             patch_prefix = t.flip(F.pad(t.flip(patch_prefix, (1,)), (0, pad_length), value=model.tokenizer.pad_token_id), (1,))
-        
+
         example_dict = {"clean_prefix": clean_prefix,
                         "patch_prefix": patch_prefix,
                         "clean_answer": clean_answer.item(),
@@ -77,7 +77,7 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
         pass
     else:
         raise ValueError(f"`dataset` is unrecognized type: {type(dataset)}. Must be path (str) or dict")
-    
+
     max_len = 0     # for padding
     for context_id in dataset:
         context = dataset[context_id]["context"]
@@ -116,7 +116,7 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
 def load_examples_hf(dataset, num_examples, model, data_dir='data', length=None):
     examples = []
     dset_dir = os.path.join(data_dir, dataset.replace("/", "_"))
-    
+
     if not os.path.exists(dset_dir):
         print("Directory does not exist, writing json files for single examples...")
         os.makedirs(dset_dir, exist_ok=True)
@@ -133,15 +133,15 @@ def load_examples_hf(dataset, num_examples, model, data_dir='data', length=None)
             fname = os.path.join(dset_dir, f"{i}.json")
             with open(fname, 'w') as f:
                 json.dump(json_data, f)
-                
+
     for i, fname in enumerate(os.listdir(dset_dir)):
         examples.append(load_examples_nopair(os.path.join(dset_dir, fname), 1, model, length=length))
         if len(examples) == num_examples:
             break
-    
+
     return examples
-    
-    
+
+
 
 def get_annotation(dataset, model, data):
     # First, understand which dataset we're working with
@@ -161,7 +161,7 @@ def get_annotation(dataset, model, data):
 
     if structure is None:
         return {}
-    
+
     annotations = {}
 
     # Iterate through words in the template and input. Get token spans
@@ -174,5 +174,5 @@ def get_annotation(dataset, model, data):
         span = (curr_token, curr_token + num_tokens-1)
         curr_token += num_tokens
         annotations[template_word] = span
-    
+
     return annotations
