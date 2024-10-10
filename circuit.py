@@ -518,8 +518,10 @@ if __name__ == '__main__':
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
-            if i >= cfg.collect_hists:
+            if cfg.collect_hists > 0 and i %  10 == 0:
                 hist_agg.save(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
+
+            if i >= cfg.collect_hists:
                 break
     else:
         process_examples(model, embed, attns, mlps, resids, dictionaries, save_basename, examples, cfg, hist_agg)
