@@ -212,7 +212,7 @@ def get_circuit(
                 prev_resid = embed
                 upstream_name = 'embed'
             else:
-                return
+                continue
 
         RM_effect = N(prev_resid, mlp, [attn])
         RA_effect = N(prev_resid, attn)
@@ -511,6 +511,9 @@ if __name__ == '__main__':
         save_basename = args.dataset.replace('/', '_')
         examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
 
+    if not os.path.exists(args.circuit_dir):
+        os.makedirs(args.circuit_dir)
+
     hist_agg = HistAggregator(cfg.example_length)
 
     if args.data_type == 'hf':
@@ -518,7 +521,7 @@ if __name__ == '__main__':
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
-            if cfg.collect_hists > 0 and i %  10 == 0:
+            if cfg.collect_hists > 0 and (i %  10 == 0 or i == cfg.collect_hists):
                 hist_agg.save(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
 
             if i >= cfg.collect_hists:

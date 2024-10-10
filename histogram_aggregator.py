@@ -3,6 +3,14 @@ import torch as t
 
 from dictionary_learning.dictionary import AutoEncoder
 
+def get_submod_repr(submod):
+    if hasattr(submod, '_module_path'):
+        return submod._module_path
+    elif hasattr(submod, 'path'):
+        return submod.path
+    else:
+        raise ValueError('submod does not have _module_path or path attribute')
+
 class HistAggregator:
     def __init__(self, seq_len, n_bins=1500):
         self.n_bins = n_bins
@@ -25,7 +33,7 @@ class HistAggregator:
 
     def compute_node_hist(self, submod, w: t.Tensor):
         # w: [N, seq_len, n_feats]
-        submod = submod._module_path
+        submod = get_submod_repr(submod)
         if submod not in self.node_nnz:
             n_feats = w.shape[2] - 1  # -1 to avoid "error" term
             self.nnz_max[submod] = np.log10(n_feats)
@@ -54,8 +62,8 @@ class HistAggregator:
     def trace_edge_hist(self, up_submod, down_submod, vjv):
         # self.saved_ws.append(vjv.save())
         # if up_submod._module_path != '.gpt_neox.layers.5.attention' or down_submod._module_path != '.gpt_neox.layers.5.mlp':
-        up_submod = up_submod._module_path
-        down_submod = down_submod._module_path
+        up_submod = get_submod_repr(up_submod)
+        down_submod = get_submod_repr(down_submod)
 
         nnz, act = self.compute_edge_hist(up_submod, down_submod, vjv)
         self.tracing_edge_nnz.append(nnz.save())
@@ -63,8 +71,8 @@ class HistAggregator:
 
 
     def aggregate_edge_hist(self, up_submod, down_submod):
-        up_submod = up_submod._module_path
-        down_submod = down_submod._module_path
+        up_submod = get_submod_repr(up_submod)
+        down_submod = get_submod_repr(down_submod)
 
         if (up_submod, down_submod) not in self.edge_nnz:
             self.edge_nnz[(up_submod, down_submod)] = t.zeros(self.n_bins).cuda()
