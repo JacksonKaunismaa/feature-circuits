@@ -171,7 +171,7 @@ def get_circuit(
     edges = defaultdict(lambda:{})
     edges[f'resid_{len(resids)-1}'] = { 'y' : effects[resids[-1]].to_tensor().to_sparse() }
 
-    def N(upstream, downstream, return_without_right=True, intermediate_stop_grads=None):
+    def N(upstream, downstream, intermediate_stop_grads=None):
         return jvp(
             clean,
             model,
@@ -182,7 +182,7 @@ def get_circuit(
             grads[downstream],  # left_vec
             deltas[upstream],   # right_vec
             cfg,
-            return_without_right=return_without_right,
+            hist_agg,
             intermediate_stop_grads=intermediate_stop_grads
         )
 
@@ -199,16 +199,18 @@ def get_circuit(
         edges[f'mlp_{layer}'][f'resid_{layer}'] = MR_effect
         edges[f'attn_{layer}'][f'resid_{layer}'] = AR_effect
 
-        if cfg.parallel_attn:
+        if not cfg.parallel_attn:
             AM_effect = N(attn, mlp)
             edges[f'attn_{layer}'][f'mlp_{layer}'] = AM_effect
 
 
         if layer > 0:
             prev_resid = resids[layer-1]
+            upstream_name = f'resid_{layer-1}'
         else:
             if embed is not None:
                 prev_resid = embed
+                upstream_name = 'embed'
             else:
                 return
 
@@ -216,9 +218,9 @@ def get_circuit(
         RA_effect = N(prev_resid, attn)
         RR_effect = N(prev_resid, resid, [mlp, attn])
 
-        edges[f'resid_{layer-1}'][f'mlp_{layer}'] = RM_effect
-        edges[f'resid_{layer-1}'][f'attn_{layer}'] = RA_effect
-        edges[f'resid_{layer-1}'][f'resid_{layer}'] = RR_effect
+        edges[upstream_name][f'mlp_{layer}'] = RM_effect
+        edges[upstream_name][f'attn_{layer}'] = RA_effect
+        edges[upstream_name][f'resid_{layer}'] = RR_effect
         print("layer done", layer)
 
     if cfg.aggregation == 'sum':
@@ -250,7 +252,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
 
     if not cfg.plot_only:
         nodes, edges = compute_circuit(model, embed, attns, mlps, resids, dictionaries,
-                                       example_basename, examples, cfg, num_examples, batches, hist_agg)
+                                       example_basename, examples, cfg, hist_agg, num_examples, batches)
     else:
         with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'rb') as infile:
             save_dict = t.load(infile)
@@ -283,7 +285,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
                     save_path=f'{args.plot_dir}/{example_basename}_{cfg.as_fname()}'
                     )
 
-def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_basename, examples, cfg: Config, num_examples, batches):
+def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_basename, examples, cfg: Config, hist_agg, num_examples, batches):
     running_nodes = None
     running_edges = None
 
@@ -516,7 +518,8 @@ if __name__ == '__main__':
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
-            if i > cfg.collect_hists:
-                hist_agg.save(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.hist.pt')
+            if i >= cfg.collect_hists:
+                hist_agg.save(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
+                break
     else:
         process_examples(model, embed, attns, mlps, resids, dictionaries, save_basename, examples, cfg, hist_agg)

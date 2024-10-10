@@ -349,10 +349,9 @@ def jvp(
         upstream_submod,
         left_vec : Union[SparseAct, Dict[int, SparseAct]],
         right_vec : SparseAct,
-        hist_agg: HistAggregator,
         cfg: Config,
+        hist_agg: HistAggregator,
         intermediate_stop_grads=None,
-        shapes=None,
 ):
     """
     Return a sparse shape [# downstream features + 1, # upstream features + 1] tensor of Jacobian-vector products.
@@ -362,7 +361,7 @@ def jvp(
         intermediate_stop_grads = []
 
     if not downstream_features: # handle empty list
-        return t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device), t.sparse_coo_tensor(t.zeros((2, 0), dtype=t.long), t.zeros(0)).to(model.device)
+        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0)).to(model.device)
 
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
@@ -421,8 +420,17 @@ def jvp(
             vjv = (upstream_act.grad @ right_vec).to_tensor() # eq 5 is vjv
             to_backprops[downstream_feat].backward(retain_graph=True)
 
+            # if upstream_submod._module_path == '.gpt_neox.layers.5.attention' and downstream_submod._module_path == '.gpt_neox.layers.5.mlp':
+            #     to_backprops = to_backprops.save()
+            #     upstream_act = upstream_act.save()
+            #     upstream_grad = upstream_act.grad.save()
+            #     vjv_saved = (upstream_act.grad @ right_vec).save()
+            #     vjv = vjv.save()
+            #     break
+
             if cfg.collect_hists > 0:
-                hist_agg.compute_edge_hist(upstream_submod, downstream_submod, vjv)
+                hist_agg.trace_edge_hist(upstream_submod, downstream_submod, vjv)
+
 
             vjv_ind, vjv_val = threshold_effects(vjv, cfg.edge_sparsity,
                                                  cfg.as_threshold,
@@ -438,8 +446,8 @@ def jvp(
     d_downstream_contracted = ((downstream_act.value @ downstream_act.value).to_tensor()).shape
     d_upstream_contracted = ((upstream_act.value @ upstream_act.value).to_tensor()).shape
 
-    if shapes is not None:
-        d_downstream_contracted, d_upstream_contracted = shapes[:3], shapes[3:]
+    if cfg.collect_hists > 0:
+        hist_agg.aggregate_edge_hist(upstream_submod, downstream_submod)
 
     print('\tnnz', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
     ## make tensors
@@ -450,6 +458,4 @@ def jvp(
     vjv_indices = t.cat([downstream_indices, upstream_indices], dim=0).to(model.device)
     vjv_values = t.cat([vjv_values[tuple(downstream_feat)].value for downstream_feat in downstream_features], dim=0)
 
-    return (
-        t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted)),
-    )
+    return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted))
