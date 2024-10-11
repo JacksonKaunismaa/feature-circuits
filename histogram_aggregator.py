@@ -1,4 +1,6 @@
+import os
 from typing import Literal
+import warnings
 import numpy as np
 import torch as t
 import matplotlib.pyplot as plt
@@ -118,6 +120,7 @@ class HistAggregator:
             for down in self.edge_nnz[up]:
                 self.edge_nnz[up][down] = self.edge_nnz[up][down].cpu().numpy()
                 self.edge_acts[up][down] = self.edge_acts[up][down].cpu().numpy()
+        return self
 
     def save(self, path):
         t.save({'node_nnz': self.node_nnz,
@@ -131,7 +134,11 @@ class HistAggregator:
 
     def load(self, path_or_dict):
         if isinstance(path_or_dict, str):
-            data = t.load(path_or_dict)
+            if os.path.exists(path_or_dict):
+                data = t.load(path_or_dict)
+            else:
+                warnings.warn(f'--accumulate_hists was specified, but file "{path_or_dict}" was not found...')
+                return
         else:
             data = path_or_dict
         self.node_nnz = data['node_nnz']
@@ -141,8 +148,9 @@ class HistAggregator:
         self.nnz_max = data['nnz_max']
         self.model_str = data['model_str']
         self.act_min, self.act_max = data['act_min_max']
-        self.cpu()
         self.n_bins = list(self.node_nnz.values())[0].shape[0]
+        if isinstance(path_or_dict, str):
+            print("Successfully loaded histograms at", path_or_dict)
 
 
     def get_hist_for_node_effect(self, layer, component, acts_or_nnz):

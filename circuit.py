@@ -393,9 +393,6 @@ if __name__ == '__main__':
                         help="Whether to treat node_sparsity and edge_sparsity as thresholds rather than sparsity levels.")
     parser.add_argument('--pen_thickness', type=float, default=0.5,
                         help="Scales the width of the edges in the circuit plot.")
-    parser.add_argument('--collect_hists', default=0, type=int,
-                        help="Collect histograms of edge and node weights for the first collect_hists examples rather"
-                             " than compute circuits. 0 to disable.")
     parser.add_argument('--prune_method', type=str, default='none',
                         choices=['none', 'source-sink', 'sink-backwards', 'first-layer-sink'],
                         help="Pruning method for the finished circuit (see circuit_plotting.build_pruned_graph)")
@@ -413,6 +410,13 @@ if __name__ == '__main__':
         default='regular',
         help="Specify the type of the dataset."
     )
+
+    hist_options = parser.add_argument_group('Histogram collection options')
+    hist_options.add_argument('--collect_hists', default=0, type=int,
+                    help="Collect histograms of edge and node weights for the first collect_hists examples rather"
+                            " than compute circuits. 0 to disable.")
+    hist_options.add_argument('--accumulate_hists', default=False, action='store_true',
+                    help="Accumulate histograms from existing files in the circuit directory.")
 
     parser.add_argument('--plot_circuit', default=False, action='store_true',
                         help="Plot the circuit after discovering it.")
@@ -515,13 +519,15 @@ if __name__ == '__main__':
         os.makedirs(args.circuit_dir)
 
     hist_agg = HistAggregator(cfg.model, cfg.example_length)
+    if args.accumulate_hists:
+        hist_agg.load(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
 
     if args.data_type == 'hf':
         for i ,example in tqdm(enumerate(examples)):
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
-            if cfg.collect_hists > 0 and (i %  10 == 0 or i == cfg.collect_hists):
+            if cfg.collect_hists > 0 and (i %  5 == 0 or i == cfg.collect_hists):
                 hist_agg.save(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
 
             if i >= cfg.collect_hists:
