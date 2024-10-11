@@ -514,7 +514,7 @@ if __name__ == '__main__':
     if not os.path.exists(args.circuit_dir):
         os.makedirs(args.circuit_dir)
 
-    hist_agg = HistAggregator(cfg.example_length)
+    hist_agg = HistAggregator(cfg.model, cfg.example_length)
 
     if args.data_type == 'hf':
         for i ,example in tqdm(enumerate(examples)):

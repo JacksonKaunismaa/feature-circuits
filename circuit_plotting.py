@@ -9,6 +9,7 @@ import torch as t
 import numpy as np
 import networkx as nx
 
+from graph_utils import dfs
 from config import Config
 from attribution import threshold_effects
 
@@ -39,23 +40,6 @@ def normalize_weight(weight, edge_scale, cfg: Config):
         ooms = np.log(edge_max) - np.log(edge_min) + 1e-6
         n_weight = (np.log(abs(weight)) - np.log(edge_min)) / ooms # in [0, 1]
     return str(abs(n_weight) * cfg.pen_thickness)
-
-def dfs(edges, start, end):
-    visited = set()
-    edge_set = set()
-
-    def dfs_helper(node):
-        if node == end:
-            return
-        visited.add(node)
-        for neighbor in edges[node]:
-            edge_set.add((node, neighbor))
-            if neighbor not in visited:
-                dfs_helper(neighbor)
-
-    dfs_helper(start)
-    return edge_set
-
 
 def _to_hex(number, scale):
     number = number / scale
