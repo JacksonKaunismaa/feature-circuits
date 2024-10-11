@@ -21,11 +21,9 @@ class DictionaryCfg():
         self.size = dictionary_size
 
 
-def load_examples(dataset, num_examples, model, seed=12, pad_to_length=None, length=None):
+def load_examples(dataset, num_examples, model, pad_to_length=None, length=None):
     examples = []
     dataset_items = open(dataset).readlines()
-    random.seed(seed)
-    random.shuffle(dataset_items)
     for line in dataset_items:
         data = json.loads(line)
         clean_prefix = model.tokenizer(data["clean_prefix"], return_tensors="pt",

@@ -40,7 +40,7 @@ class Config:
 
     # Miscellaneous
     disable_tqdm: bool = False
-    seed: int = 42
+    seed: int | None = None
 
     def update(self, args: Namespace):
         for k, v in vars(args).items():

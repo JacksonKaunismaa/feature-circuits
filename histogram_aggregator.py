@@ -53,6 +53,7 @@ class HistAggregator:
         self.edge_nnz = {}
         self.edge_acts = {}
 
+    @t.no_grad()
     def compute_node_hist(self, submod, w: t.Tensor):
         # w: [N, seq_len, n_feats]
         submod = get_submod_repr(submod)
@@ -68,7 +69,7 @@ class HistAggregator:
         self.node_nnz[submod] += t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min, max=self.nnz_max[submod])
         self.node_acts[submod] += t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min, max=self.act_max)
 
-
+    @t.no_grad()
     def compute_edge_hist(self, up_submod, down_submod, w: t.Tensor):
         # w: [N, seq_len, n_feat_down]
         w_late = w[:, self.seq_len//2:, :-1]  # -1 to avoid "error" term
@@ -80,7 +81,7 @@ class HistAggregator:
                                                            max=self.act_max)
         return nnz_hist, act_hist
 
-
+    @t.no_grad()
     def trace_edge_hist(self, up_submod, down_submod, vjv):
         # self.saved_ws.append(vjv.save())
         # if up_submod._module_path != '.gpt_neox.layers.5.attention' or down_submod._module_path != '.gpt_neox.layers.5.mlp':
@@ -91,7 +92,7 @@ class HistAggregator:
         self.tracing_edge_nnz.append(nnz.save())
         self.tracing_edge_act.append(act.save())
 
-
+    @t.no_grad()
     def aggregate_edge_hist(self, up_submod, down_submod):
         up_submod = get_submod_repr(up_submod)
         down_submod = get_submod_repr(down_submod)
@@ -132,12 +133,12 @@ class HistAggregator:
                 'model_str': self.model_str
                 }, path)
 
-    def load(self, path_or_dict):
+    def load(self, path_or_dict, map_location=None):
         if isinstance(path_or_dict, str):
             if os.path.exists(path_or_dict):
-                data = t.load(path_or_dict)
+                data = t.load(path_or_dict, map_location=map_location)
             else:
-                warnings.warn(f'--accumulate_hists was specified, but file "{path_or_dict}" was not found...')
+                warnings.warn(f'Tried to load histogram, but file "{path_or_dict}" was not found...')
                 return
         else:
             data = path_or_dict
@@ -151,6 +152,7 @@ class HistAggregator:
         self.n_bins = list(self.node_nnz.values())[0].shape[0]
         if isinstance(path_or_dict, str):
             print("Successfully loaded histograms at", path_or_dict)
+        return self
 
 
     def get_hist_for_node_effect(self, layer, component, acts_or_nnz):

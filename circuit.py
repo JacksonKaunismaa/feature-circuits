@@ -4,6 +4,7 @@ import json
 import math
 import os
 from collections import defaultdict
+import random
 
 import numpy as np
 import torch as t
@@ -428,7 +429,7 @@ if __name__ == '__main__':
                         help="Directory to save/load circuits.")
     parser.add_argument("--plot_dir", type=str, default="circuits/figures/",
                         help="Directory to save figures.")
-    parser.add_argument('--seed', type=int, default=12)
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for shuffling examples.')
     parser.add_argument('--device', type=str, default='cuda:0')
     args = parser.parse_args()
 
@@ -521,6 +522,10 @@ if __name__ == '__main__':
     hist_agg = HistAggregator(cfg.model, cfg.example_length)
     if args.accumulate_hists:
         hist_agg.load(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
+
+    if cfg.seed is not None:
+        random.seed(cfg.seed)
+    random.shuffle(examples)
 
     if args.data_type == 'hf':
         for i ,example in tqdm(enumerate(examples)):
