@@ -9,7 +9,7 @@ import torch as t
 import numpy as np
 import networkx as nx
 
-from graph_utils import dfs
+from graph_utils import dfs, iterate_edges
 from config import Config
 from attribution import threshold_effects
 
@@ -137,18 +137,8 @@ def compute_edge_scale(jacobian):
     edge_max = float(max(abs(jacobian.values().min()), abs(jacobian.values().max())))
     return edge_min, edge_max
 
-def iterate_edges(nodes, edges, nodes_by_submod, layer, cfg: Config):
-    if layer == 0:
-        start_node = cfg.first_component
-    else:
-        start_node = f'resid_{layer-1}'
-    end_node = f'resid_{layer}'
-
-    # select all edges that are on the path from resid-1 to resid
-    layer_edges = dfs(edges, start_node, end_node)
-
-    # add each to the graph, checking to make sure that the weight is non-zero
-    for (up, down) in layer_edges:
+def iterate_edge_feats(nodes, edges, nodes_by_submod, layer, cfg: Config):
+    for up, down in iterate_edges(edges, layer, cfg.first_component):
         jacobian = edges[up][down]
         err_idx = nodes[up].shape[0]
         edge_scale = compute_edge_scale(jacobian)
@@ -170,7 +160,7 @@ def build_pruned_graph(nodes, edges, nodes_by_submod, cfg: Config):
 
     # construct graph in networkx
     for layer in trange(cfg.layers):
-        for (uname, dname, _, _) in iterate_edges(nodes, edges, nodes_by_submod, layer, cfg):
+        for (uname, dname, _, _) in iterate_edge_feats(nodes, edges, nodes_by_submod, layer, cfg):
             G.add_edge(uname, dname)
 
     # add final edge to output node 'y'
@@ -277,7 +267,7 @@ def build_formatted_graph(nodes, edges, to_hex, get_label, cfg: Config, nodes_by
             add_layer_nodes_to_graph(G, component, layer, nodes, nodes_by_submod, to_hex, get_label, pruned_G)
 
         # add all edges
-        for (uname, dname, weight, edge_scale) in iterate_edges(nodes, edges, nodes_by_submod, layer, cfg):
+        for (uname, dname, weight, edge_scale) in iterate_edge_feats(nodes, edges, nodes_by_submod, layer, cfg):
             add_edge_prune_filter(uname, dname, G, pruned_G,
                                 penwidth=normalize_weight(weight, edge_scale, cfg),
                                 color = 'red' if weight < 0 else 'blue')
