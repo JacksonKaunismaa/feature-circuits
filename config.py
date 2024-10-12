@@ -2,12 +2,17 @@ import dataclasses
 from typing import Literal
 from argparse import Namespace
 
+from histogram_aggregator import ThresholdType
+
 @dataclasses.dataclass
 class Config:
     # Algorithm controls
-    node_sparsity: float = 0.0
-    edge_sparsity: float = 0.0
-    as_threshold: bool = False  # if True, edge_sparsity is treated as a threshold, instead of a sparsity amount
+    node_threshold: float = 0.0
+    edge_threshold: float = 0.0
+    node_thresholds: dict[str, float] = None  # mapping from submod name to threshold to be used (typically, we auto-generate this)
+    edge_thresholds: dict[dict[str, str], float] = None  # mapping from submod name to threshold to be used (typically, we auto-generate this)
+    node_thresh_type: ThresholdType = ThresholdType.THRESH
+    edge_thresh_type: ThresholdType = ThresholdType.THRESH
     nodes_only: bool = False
     method: Literal['ig', 'attrib', 'exact'] = 'ig'
     aggregation: Literal['none', 'sum'] = 'sum'
@@ -49,4 +54,4 @@ class Config:
 
 
     def as_fname(self):
-        return f'dict{self.dict_id}_node{self.node_sparsity}_edge{self.edge_sparsity}_n{self.num_examples}_agg{self.aggregation}_thresh{self.as_threshold}_method{self.method}_prune{self.prune_method}_model{self.model.replace("/", "_")}'
+        return f'dict{self.dict_id}_node{self.node_threshold}-{self.node_thresh_type.value}_edge{self.edge_threshold}-{self.edge_thresh_type.value}_agg{self.aggregation}_method{self.method}_prune{self.prune_method}_model{self.model.replace("/", "_")}'

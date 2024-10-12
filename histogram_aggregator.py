@@ -26,6 +26,9 @@ def normalize_path(path):
     return f'{component}_{layer}'
 
 def get_submod_repr(submod):
+    """Return canonical string represention of a submod (e.g. attn_0, mlp_5, ...)"""
+    if isinstance(submod, str):
+        return submod
     if hasattr(submod, '_module_path'):
         path =  submod._module_path
     elif hasattr(submod, 'path'):
@@ -150,7 +153,7 @@ class HistAggregator:
                 data = t.load(path_or_dict, map_location=map_location)
             else:
                 warnings.warn(f'Tried to load histogram, but file "{path_or_dict}" was not found...')
-                return
+                return None
         else:
             data = path_or_dict
         self.node_nnz = data['node_nnz']
@@ -259,6 +262,16 @@ class HistAggregator:
                 hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts', thresh, thresh_type)
                 thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
                 thresh_vals[up][down] = 10**bins[thresh_loc]
+        return thresh_vals
+
+    def compute_node_thresholds(self, thresh: float, thresh_type: ThresholdType):
+        thresh_vals = {}
+        for mod_name in self.node_acts:
+            hist = self.node_acts[mod_name]
+            feat_size = 10**self.nnz_max[mod_name]
+            hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts', thresh, thresh_type)
+            thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
+            thresh_vals[mod_name] = 10**bins[thresh_loc]
         return thresh_vals
 
 

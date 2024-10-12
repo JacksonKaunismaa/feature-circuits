@@ -14,7 +14,7 @@ from nnsight import LanguageModel
 from dictionary_learning import AutoEncoder
 from dictionary_learning.dictionary import IdentityDict
 
-from histogram_aggregator import HistAggregator
+from histogram_aggregator import HistAggregator, ThresholdType
 from activation_utils import SparseAct
 from attribution import patching_effect, jvp, threshold_effects
 from circuit_plotting import plot_circuit, plot_circuit_posaligned
@@ -147,7 +147,7 @@ def get_circuit(
         effect = effects[submod].to_tensor()
         if cfg.collect_hists > 0:
             hist_agg.compute_node_hist(submod, effect)
-        features_by_submod[submod] = threshold_effects(effect, cfg.node_sparsity, cfg.as_threshold)
+        features_by_submod[submod] = threshold_effects(effect, cfg, submod)
 
     # submodule -> list of indices
 
@@ -386,12 +386,16 @@ if __name__ == '__main__':
                         help="Number of examples to process at once when running circuit discovery.")
     parser.add_argument('--aggregation', type=str, default='sum',
                         help="Aggregation across token positions. Should be one of `sum` or `none`.")
-    parser.add_argument('--node_sparsity', type=float, default=0.2,
-                        help="Indirect effect sparsity for keeping circuit nodes.")
-    parser.add_argument('--edge_sparsity', type=float, default=0.02,
-                        help="Indirect effect sparsity for keeping edges.")
-    parser.add_argument('--as_threshold', default=False, action='store_true',
-                        help="Whether to treat node_sparsity and edge_sparsity as thresholds rather than sparsity levels.")
+    parser.add_argument('--node_threshold', type=float, default=0.2,
+                        help="Indirect effect threshold for keeping circuit nodes.")
+    parser.add_argument('--node_thresh_type', type=ThresholdType, default=ThresholdType.THRESH, choices=list(ThresholdType),
+                        help="Threshold type for node_threshold.")
+    parser.add_argument('--edge_threshold', type=float, default=0.02,
+                        help="Indirect effect threshold for keeping edges.")
+    parser.add_argument('--edge_thresh_type', type=ThresholdType, default=ThresholdType.THRESH, choices=list(ThresholdType),
+                        help="Threshold type for edge_threshold.")
+    parser.add_argument('--histogram_path', type=str, default='',
+                        help="Path to histograms for thresholding.")
     parser.add_argument('--pen_thickness', type=float, default=0.5,
                         help="Scales the width of the edges in the circuit plot.")
     parser.add_argument('--prune_method', type=str, default='none',
@@ -520,8 +524,19 @@ if __name__ == '__main__':
         os.makedirs(args.circuit_dir)
 
     hist_agg = HistAggregator(cfg.model, cfg.example_length)
-    if args.accumulate_hists:
-        hist_agg.load(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
+    hist_threshold_types = [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH]
+    needs_hist = cfg.node_thresh_type in hist_threshold_types or cfg.edge_thresh_type in hist_threshold_types
+    if args.accumulate_hists or needs_hist:
+        hist_path = args.histogram_path if args.histogram_path else f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
+        ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
+        if ret_val is None and needs_hist:
+            raise ValueError("Threshold method requires histogram, but no existing histogram was found. Please run with --collect_hists first.")
+
+    if cfg.node_thresh_type in hist_threshold_types:
+        cfg.node_thresholds = hist_agg.compute_node_thresholds(cfg.node_threshold, cfg.node_thresh_type)
+
+    if cfg.edge_thresh_type in hist_threshold_types:
+        cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
 
     if cfg.seed is not None:
         random.seed(cfg.seed)
@@ -532,10 +547,10 @@ if __name__ == '__main__':
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
-            if cfg.collect_hists > 0 and (i %  5 == 0 or i == cfg.collect_hists):
-                hist_agg.save(f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt')
-
-            if i >= cfg.collect_hists:
-                break
+            if cfg.collect_hists > 0:
+                if i %  5 == 0 or i >= cfg.collect_hists:
+                    hist_agg.save(hist_path)
+                if i >= cfg.collect_hists:
+                    break
     else:
         process_examples(model, embed, attns, mlps, resids, dictionaries, save_basename, examples, cfg, hist_agg)

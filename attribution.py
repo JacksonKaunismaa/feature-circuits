@@ -6,7 +6,7 @@ from typing import Dict, Union
 import torch
 
 from config import Config
-from histogram_aggregator import HistAggregator
+from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
 from activation_utils import SparseAct
 
 DEBUGGING = False
@@ -304,15 +304,15 @@ def patching_effect(
         raise ValueError(f"Unknown method {method}")
 
 
-def threshold_effects(effect: t.Tensor, threshold: float, as_threshold: bool, stack=True, k_sparsity: int | None =None):
+def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_sparsity: int | None =None):
     """
     Return the indices of the top-k features with the highest absolute effect, or if as_threshold is True, the indices
     of the features with absolute effect greater than threshold.
 
     Args:
         effect: tensor to apply threshold to
-        threshold: threshold value (or sparsity value)
-        as_threshold: whether to treat `threshold` as a threshold or a sparsity value
+        cfg: configuration object, contains relevant parameters for controlling thresholds
+        effect_name: name of the effect tensor (for indexing into cfg.node_thresholds, if necessary, and also for determining whether it is a node or edge effect)
         stack: whether to stack the indices into a tensor. Only has effect if as_threshold is False
         k_sparsity: if not None, the number of features to return (otherwise, calculated from `effect` and `threshold`)
 
@@ -323,7 +323,24 @@ def threshold_effects(effect: t.Tensor, threshold: float, as_threshold: bool, st
         else:
             indices: indices of the top-k features, stacked into a tensor, and then .tolist()'d
     """
-    if as_threshold:
+    is_edge = isinstance(effect_name, tuple)
+    if is_edge:
+        effect_name = [get_submod_repr(submod) for submod in effect_name]
+    else:
+        effect_name = get_submod_repr(effect_name)
+    method = cfg.edge_thresh_type if is_edge else cfg.node_thresh_type
+
+    if method in [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH]:
+        threshold_dict = cfg.edge_thresholds if is_edge else cfg.node_thresholds
+        if is_edge:
+            threshold = threshold_dict[effect_name[0]][effect_name[1]]
+        else:
+            threshold = threshold_dict[effect_name]
+        method = ThresholdType.THRESH
+    else:
+        threshold = cfg.edge_threshold if is_edge else cfg.node_threshold
+
+    if method == ThresholdType.THRESH:
         ind = t.nonzero(effect.flatten().abs() > threshold).flatten()
         if stack:
             return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()
@@ -372,14 +389,14 @@ def jvp(
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
 
-    if cfg.as_threshold:
-        k_sparsity = None
-    else:
+    if cfg.edge_thresh_type == ThresholdType.SPARSITY:
         n_enc = dictionaries[upstream_submod].encoder.out_features
         numel_per_batch = n_enc * input.shape[1]
-        k_sparsity = int(cfg.edge_sparsity * numel_per_batch)
+        k_sparsity = int(cfg.edge_threshold * numel_per_batch)
         print('feat', len(downstream_features), input.shape[1])
         print('\tthresh', k_sparsity)
+    else:
+        k_sparsity = None
 
     downstream_dict, upstream_dict = dictionaries[downstream_submod], dictionaries[upstream_submod]
 
@@ -432,8 +449,8 @@ def jvp(
                 hist_agg.trace_edge_hist(upstream_submod, downstream_submod, vjv)
 
 
-            vjv_ind, vjv_val = threshold_effects(vjv, cfg.edge_sparsity,
-                                                 cfg.as_threshold,
+            vjv_ind, vjv_val = threshold_effects(vjv, cfg,
+                                                 (upstream_submod, downstream_submod),
                                                  k_sparsity=k_sparsity,
                                                  stack=False)
 
