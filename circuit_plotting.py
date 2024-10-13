@@ -39,7 +39,9 @@ def normalize_weight(weight, edge_scale, cfg: Config):
     elif cfg.edge_thickness_normalization == 'log':
         ooms = np.log(edge_max) - np.log(edge_min) + 1e-6
         n_weight = (np.log(abs(weight)) - np.log(edge_min)) / ooms # in [0, 1]
-    return str(abs(n_weight) * cfg.pen_thickness)
+    # rescale n_weight to be in [0.1, 1] so that minimum thickness is still visible
+    scaled_weight = 0.1 + abs(n_weight)*0.9
+    return str(scaled_weight * cfg.pen_thickness)
 
 def _to_hex(number, scale):
     number = number / scale
