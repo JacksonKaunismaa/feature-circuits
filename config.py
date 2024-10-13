@@ -33,22 +33,26 @@ class Config:
 
     # Model
     model: str = 'gpt2'
-    has_embed: bool = True
-    device: str = 'cuda'
-    d_model: int = 512
+    d_model: int = 768
     resid_posn: Literal['post', 'mid', 'pre'] = 'post'
-    layers: int = 6
-    first_component: Literal['embed', 'attn_0', 'resid_0'] = 'embed'
+    layers: int = 12
+    first_component: Literal['embed', 'attn_0', 'resid_0'] = 'attn_0'
     parallel_attn: bool = False
     dict_id: str = 'gpt2'
     annotations_path: str = ''
 
     # Miscellaneous
+    device: str = 'cuda'
     disable_tqdm: bool = False
     seed: int | None = None
 
     def update(self, args: Namespace):
         for k, v in vars(args).items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
+    def update_from_dict(self, args: dict):
+        for k, v in args.items():
             if hasattr(self, k):
                 setattr(self, k, v)
 

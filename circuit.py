@@ -14,7 +14,7 @@ from nnsight import LanguageModel
 from dictionary_learning import AutoEncoder
 from dictionary_learning.dictionary import IdentityDict
 
-from histogram_aggregator import HistAggregator, ThresholdType
+from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
 from activation_utils import SparseAct
 from attribution import patching_effect, jvp, threshold_effects
 from circuit_plotting import plot_circuit, plot_circuit_posaligned
@@ -195,6 +195,7 @@ def get_circuit(
         if cfg.collect_hists > 0:
             hist_agg.compute_node_hist(submod, effect)
         features_by_submod[submod] = threshold_effects(effect, cfg, submod)
+        print('\tfeats', get_submod_repr(submod), len(features_by_submod[submod]))
 
     # submodule -> list of indices
 
@@ -522,8 +523,14 @@ if __name__ == '__main__':
             dictionaries[attns[i]] = IdentityDict(cfg.d_model)
 
     elif cfg.dict_id == 'gpt2':
-        cfg.resid_posn = 'post'
-        cfg.parallel_attn = False
+        cfg.update_from_dict(dict(
+            resid_posn='post',
+            parallel_attn=False,
+            first_component='attn_0',
+            layers=12,
+            d_model=768
+        ))
+
         for i in range(len(model.transformer.h)):
             dictionaries[resids[i]] = AutoEncoder.from_hf(
                 "jbloom/GPT2-Small-OAI-v5-32k-resid-post-SAEs",
@@ -541,8 +548,13 @@ if __name__ == '__main__':
                 device=device
             )
     else:
-        cfg.parallel_attn = True
-        cfg.resid_posn = 'post'
+        cfg.update_from_dict(dict(
+            resid_posn='post',
+            parallel_attn=True,
+            first_component='embed',
+            layers=6,
+            d_model=512
+        ))
         dictionaries[embed] = AutoEncoder.from_pretrained(
             f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
             device=device

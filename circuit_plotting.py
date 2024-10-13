@@ -91,7 +91,7 @@ def _get_label(name, annotations=None):
 
 def nodes_by_submod_add_entry(nodes, nodes_by_submod, node_name, cfg: Config):
     submod_nodes = nodes[node_name].to_tensor()
-    topk_ind = threshold_effects(submod_nodes, cfg, node_name)
+    topk_ind = threshold_effects(submod_nodes, cfg, node_name, aggregated=True)
 
     nodes_by_submod[node_name] = {
         tuple(idx) : submod_nodes[tuple(idx)].item() for idx in topk_ind

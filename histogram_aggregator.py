@@ -259,7 +259,7 @@ class HistAggregator:
             for down in self.edge_acts[up]:
                 hist = self.edge_acts[up][down]
                 feat_size = 10**self.nnz_max[up]
-                hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts', thresh, thresh_type)
+                hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts')
                 thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
                 thresh_vals[up][down] = 10**bins[thresh_loc]
         return thresh_vals
@@ -269,7 +269,7 @@ class HistAggregator:
         for mod_name in self.node_acts:
             hist = self.node_acts[mod_name]
             feat_size = 10**self.nnz_max[mod_name]
-            hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts', thresh, thresh_type)
+            hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts')
             thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
             thresh_vals[mod_name] = 10**bins[thresh_loc]
         return thresh_vals

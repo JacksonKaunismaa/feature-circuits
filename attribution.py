@@ -304,7 +304,8 @@ def patching_effect(
         raise ValueError(f"Unknown method {method}")
 
 
-def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_sparsity: int | None =None):
+def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_sparsity: int | None =None,
+                      aggregated=False):
     """
     Return the indices of the top-k features with the highest absolute effect, or if as_threshold is True, the indices
     of the features with absolute effect greater than threshold.
@@ -315,6 +316,8 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_
         effect_name: name of the effect tensor (for indexing into cfg.node_thresholds, if necessary, and also for determining whether it is a node or edge effect)
         stack: whether to stack the indices into a tensor. Only has effect if as_threshold is False
         k_sparsity: if not None, the number of features to return (otherwise, calculated from `effect` and `threshold`)
+        aggregated: only has effect if sparsity is the method. If True, sparsity level will be multiplied by seq_len
+            to match thresholding behaviour in earlier parts of the circuit discovery process
 
     Returns:
         if stack == False:
@@ -331,11 +334,10 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_
     method = cfg.edge_thresh_type if is_edge else cfg.node_thresh_type
 
     if method in [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH]:
-        threshold_dict = cfg.edge_thresholds if is_edge else cfg.node_thresholds
         if is_edge:
-            threshold = threshold_dict[effect_name[0]][effect_name[1]]
+            threshold = cfg.edge_thresholds[effect_name[0]][effect_name[1]]
         else:
-            threshold = threshold_dict[effect_name]
+            threshold = cfg.node_thresholds[effect_name]
         method = ThresholdType.THRESH
     else:
         threshold = cfg.edge_threshold if is_edge else cfg.node_threshold
@@ -349,6 +351,8 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_
     else:  # as_sparsity
         if k_sparsity is None:
             n_features = effect.numel()
+            if aggregated:
+                n_features *= cfg.example_length
             k_sparsity = int(threshold * n_features)
         topk = effect.abs().flatten().topk(k_sparsity)
         topk_ind = topk.indices[topk.values > 0]
@@ -393,7 +397,6 @@ def jvp(
         n_enc = dictionaries[upstream_submod].encoder.out_features
         numel_per_batch = n_enc * input.shape[1]
         k_sparsity = int(cfg.edge_threshold * numel_per_batch)
-        print('feat', len(downstream_features), input.shape[1])
         print('\tthresh', k_sparsity)
     else:
         k_sparsity = None
@@ -466,7 +469,8 @@ def jvp(
     if cfg.collect_hists > 0:
         hist_agg.aggregate_edge_hist(upstream_submod, downstream_submod)
 
-    print('\tnnz', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
+    edge_name = [get_submod_repr(m) for m in (upstream_submod, downstream_submod)]
+    print(f'\tnnz {edge_name}', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
     ## make tensors
     downstream_indices = t.tensor([downstream_feat for downstream_feat in downstream_features
                                 for _ in vjv_indices[tuple(downstream_feat)].value], device=model.device).T
