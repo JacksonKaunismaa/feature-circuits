@@ -378,7 +378,7 @@ def jvp(
         intermediate_stop_grads = []
 
     if not downstream_features: # handle empty list
-        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0)).to(model.device)
+        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0), (0,)*6, is_coalesced=True).to(model.device)
 
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
@@ -475,6 +475,6 @@ def jvp(
     vjv_indices = t.cat([downstream_indices, upstream_indices], dim=0).to(model.device)
     vjv_values = t.cat([vjv_values[tuple(downstream_feat)].value for downstream_feat in downstream_features], dim=0)
     if vjv_values.shape[0] == 0:
-        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0)).to(model.device)
+        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0), (0,)*6, is_coalesced=True).to(model.device)
 
-    return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted))
+    return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted), is_coalesced=True)

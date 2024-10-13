@@ -45,11 +45,11 @@ def prod(l):
     return out
 
 def sparse_flatten(x):
-    x = x.coalesce()
     return t.sparse_coo_tensor(
         flatten_index(x.indices(), x.shape),
         x.values(),
-        (prod(x.shape),)
+        (prod(x.shape),),
+        is_coalesced=True
     )
 
 def reshape_index(index, shape):
@@ -72,9 +72,9 @@ def sparse_reshape(x, shape):
     return x reshaped to shape
     """
     # first flatten x
-    x = sparse_flatten(x).coalesce()
+    x = sparse_flatten(x)
     new_indices = reshape_index(x.indices()[0], shape)
-    return t.sparse_coo_tensor(new_indices.t(), x.values(), shape)
+    return t.sparse_coo_tensor(new_indices.t(), x.values(), shape, is_coalesced=True)
 
 def sparse_mean(x, dim):
     if isinstance(dim, int):
@@ -83,10 +83,52 @@ def sparse_mean(x, dim):
         return x.sum(dim=dim) / prod(x.shape[d] for d in dim)
 
 
+def sparse_select_last(x, dim):
+    if isinstance(dim, tuple):
+        seq_len = x.shape[dim[0]]
+        good_mask = x.indices()[dim[0]] == seq_len - 1
+        new_shape = [s for i, s in enumerate(x.shape) if i not in dim]
+        new_dims = [i for i in range(len(x.shape)) if i not in dim]
+        for d in dim[1:]:
+            good_mask &= x.indices()[d] == x.shape[d] - 1
+    else:
+        seq_len = x.shape[dim]
+        good_mask = x.indices()[dim] == seq_len - 1
+        new_shape = [s for i, s in enumerate(x.shape) if i != dim]
+        new_dims = [i for i in range(len(x.shape)) if i != dim]
+
+    values = x.values()[good_mask]
+    indices = x.indices()[new_dims][:, good_mask]
+    return t.sparse_coo_tensor(indices, values, new_shape, is_coalesced=True)
+
+
 ######## end sparse tensor utilities ########
 
+def aggregate_single_node_edge(is_node, weight_matrix, dims, divisor, last_agg):
+    if last_agg:
+        if is_node:
+            weight_matrix = sparse_select_last(weight_matrix, dims[0])
+        else:
+            weight_matrix = sparse_select_last(weight_matrix, dims)
+    else:
+        if is_node:
+            weight_matrix = weight_matrix.sum(dim=dims[0]) / divisor
+        else:
+            weight_matrix = weight_matrix.sum(dim=dims) / divisor
+    return weight_matrix
 
-def aggregate_nodes_edges(nodes, edges, dims, divisor_dim=None):
+
+def aggregate_nodes_edges(nodes, edges, dims: tuple[int], divisor_dim: int=None, last_agg: bool=False):
+    """Apply aggregation method to all nodes and edges.
+
+    Args:
+        nodes (dict): dictionary of nodes
+        edges (dict): dictionary of edges
+        dims (tuple): dimensions to aggregate over
+        divisor_dim (int): if last_agg=False, then results will be divided by the size of this dimension. Otherwise has no effect.
+        last_agg (bool): if True, then the last element of the specified dimension for each dimension in dims will be selected
+    """
+
     for child in edges:
         for parent in edges[child]:
 
@@ -100,14 +142,19 @@ def aggregate_nodes_edges(nodes, edges, dims, divisor_dim=None):
                 continue
 
             if parent == 'y':
-                weight_matrix = weight_matrix.sum(dim=dims[0]) / divisor
+                weight_matrix = aggregate_single_node_edge(True, weight_matrix, dims, divisor, last_agg)
             else:
-                weight_matrix = weight_matrix.sum(dim=dims) / divisor
+                weight_matrix = aggregate_single_node_edge(False, weight_matrix, dims, divisor, last_agg)
+
             edges[child][parent] = weight_matrix
+
     for node in nodes:
         if node != 'y':
-            nodes[node] = nodes[node].sum(dim=dims[0]) / divisor
-
+            slices = [slice(None) for _ in range(len(nodes[node].shape))]
+            slices[dims[0]] = -1
+            n = nodes[node]
+            n.act = n.act[slices]
+            n.resc = n.resc[slices]
 
 
 def get_circuit(
@@ -166,6 +213,10 @@ def get_circuit(
             for k in nodes:
                 if k != 'y':
                     nodes[k] = nodes[k].sum(dim=1)
+        if cfg.aggregation == 'last':
+            for k in nodes:
+                if k != 'y':
+                    nodes[k] = nodes[k][:,-1]
         nodes = {k : v.mean(dim=0) for k, v in nodes.items()}
         return nodes, None
 
@@ -233,6 +284,11 @@ def get_circuit(
     elif cfg.aggregation == 'none':
         # aggregate across batch dimensions
         aggregate_nodes_edges(nodes, edges, (0, 3), divisor_dim=0)
+    elif cfg.aggregation == 'last':
+        # select last sequence position
+        aggregate_nodes_edges(nodes, edges, (1, 4), divisor_dim=0, last_agg=True)
+        # sum aggregate across batch dim
+        aggregate_nodes_edges(nodes, edges, (0, 2), divisor_dim=0)
 
     else:
         raise ValueError(f"Unknown aggregation: {cfg.aggregation}")
@@ -384,7 +440,7 @@ if __name__ == '__main__':
                         help="The width of the dictionary encoder.")
     parser.add_argument('--batch_size', type=int, default=32,
                         help="Number of examples to process at once when running circuit discovery.")
-    parser.add_argument('--aggregation', type=str, default='sum',
+    parser.add_argument('--aggregation', type=str, default='sum', choices=['sum', 'last', 'none'],
                         help="Aggregation across token positions. Should be one of `sum` or `none`.")
     parser.add_argument('--node_threshold', type=float, default=0.2,
                         help="Indirect effect threshold for keeping circuit nodes.")

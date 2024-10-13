@@ -127,7 +127,7 @@ def plot_circuit(nodes, edges, annotations, cfg: Config, example_text: str | Non
     G.render(save_path, format='png', cleanup=False)
 
 def compute_edge_scale(jacobian):
-    if jacobian.shape[0] == 0:
+    if jacobian.values().shape[0] == 0:
         return None, None
     # smallest non-zero abs(edge weight)
     edge_min = float(abs(jacobian.values()[jacobian.values().nonzero()]).min())
