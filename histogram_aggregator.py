@@ -60,10 +60,13 @@ class HistAggregator:
 
         self.tracing_edge_nnz = []  # to deal with nnsight tracing
         self.tracing_edge_act = []
-        # self.saved_ws = []
+        # self.tracing_raw_edge_act = []
 
         self.edge_nnz = {}
         self.edge_acts = {}
+
+        # self.raw_node_acts = {}
+        # self.raw_edge_acts = {}
 
     @t.no_grad()
     def compute_node_hist(self, submod, w: t.Tensor):
@@ -74,6 +77,7 @@ class HistAggregator:
             self.nnz_max[submod] = np.log10(n_feats)
             self.node_nnz[submod] = t.zeros(self.n_bins).cuda()
             self.node_acts[submod] = t.zeros(self.n_bins).cuda()
+            # self.raw_node_acts[submod] = []
 
         self.n_samples[submod] += 1
         w_late = w[:, self.seq_len//2:, :-1]   # -1 to avoid error term
@@ -81,6 +85,7 @@ class HistAggregator:
         abs_w = abs(w_late)
         self.node_nnz[submod] += t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min, max=self.nnz_max[submod])
         self.node_acts[submod] += t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min, max=self.act_max)
+        # self.raw_node_acts[submod].append(w.cpu().numpy())
 
     @t.no_grad()
     def compute_edge_hist(self, up_submod, down_submod, w: t.Tensor):
@@ -96,14 +101,13 @@ class HistAggregator:
 
     @t.no_grad()
     def trace_edge_hist(self, up_submod, down_submod, vjv):
-        # self.saved_ws.append(vjv.save())
-        # if up_submod._module_path != '.gpt_neox.layers.5.attention' or down_submod._module_path != '.gpt_neox.layers.5.mlp':
         up_submod = get_submod_repr(up_submod)
         down_submod = get_submod_repr(down_submod)
 
         nnz, act = self.compute_edge_hist(up_submod, down_submod, vjv)
         self.tracing_edge_nnz.append(nnz.save())
         self.tracing_edge_act.append(act.save())
+        # self.tracing_raw_edge_act.append(vjv.cpu().save())
 
     @t.no_grad()
     def aggregate_edge_hist(self, up_submod, down_submod):
@@ -113,18 +117,22 @@ class HistAggregator:
         if up_submod not in self.edge_nnz:
             self.edge_nnz[up_submod] = {}
             self.edge_acts[up_submod] = {}
+            # self.raw_edge_acts[up_submod] = {}
 
         if down_submod not in self.edge_nnz[up_submod]:
             self.edge_nnz[up_submod][down_submod] = t.zeros(self.n_bins).cuda()
             self.edge_acts[up_submod][down_submod] = t.zeros(self.n_bins).cuda()
+            # self.raw_edge_acts[up_submod][down_submod] = []
 
+        # for nnz_hist, act_hist, raw_act in zip(self.tracing_edge_nnz, self.tracing_edge_act, self.tracing_raw_edge_act):
         for nnz_hist, act_hist in zip(self.tracing_edge_nnz, self.tracing_edge_act):
             self.edge_nnz[up_submod][down_submod] += nnz_hist.value
             self.edge_acts[up_submod][down_submod] += act_hist.value
+            # self.raw_edge_acts[up_submod][down_submod].append(raw_act.value.numpy())
 
         self.tracing_edge_nnz.clear()
         self.tracing_edge_act.clear()
-        # self.saved_ws.clear()
+        # self.tracing_raw_edge_act.clear()
 
     def cpu(self):
         for k in self.node_nnz:
@@ -144,7 +152,9 @@ class HistAggregator:
                 'nnz_max': self.nnz_max,
                 'act_min_max': (self.act_min, self.act_max),
                 'model_str': self.model_str,
-                'n_samples': self.n_samples
+                'n_samples': self.n_samples,
+                # 'raw_node_acts': self.raw_node_acts,
+                # 'raw_edge_acts': self.raw_edge_acts
                 }, path)
 
     def load(self, path_or_dict, map_location=None):
@@ -160,6 +170,8 @@ class HistAggregator:
         self.node_acts = data['node_acts']
         self.edge_nnz = data['edge_nnz']
         self.edge_acts = data['edge_acts']
+        # self.raw_node_acts = data['raw_node_acts']
+        # self.raw_edge_acts = data['raw_edge_acts']
         self.nnz_max = data['nnz_max']
         self.model_str = data['model_str']
         self.act_min, self.act_max = data['act_min_max']

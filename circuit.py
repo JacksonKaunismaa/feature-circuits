@@ -195,7 +195,7 @@ def get_circuit(
         if cfg.collect_hists > 0:
             hist_agg.compute_node_hist(submod, effect)
         features_by_submod[submod] = threshold_effects(effect, cfg, submod)
-        print('\tfeats', get_submod_repr(submod), len(features_by_submod[submod]))
+        print('\tn_feats', get_submod_repr(submod), len(features_by_submod[submod]))
 
     # submodule -> list of indices
 

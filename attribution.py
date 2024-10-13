@@ -397,7 +397,6 @@ def jvp(
         n_enc = dictionaries[upstream_submod].encoder.out_features
         numel_per_batch = n_enc * input.shape[1]
         k_sparsity = int(cfg.edge_threshold * numel_per_batch)
-        print('\tthresh', k_sparsity)
     else:
         k_sparsity = None
 
