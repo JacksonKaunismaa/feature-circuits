@@ -304,7 +304,7 @@ def patching_effect(
         raise ValueError(f"Unknown method {method}")
 
 
-def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_sparsity: int | None =None,
+def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, #k_sparsity: int | None =None,
                       aggregated=False):
     """
     Return the indices of the top-k features with the highest absolute effect, or if as_threshold is True, the indices
@@ -349,16 +349,18 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_
         return ind, effect.flatten()[ind]
 
     else:  # as_sparsity
-        if k_sparsity is None:
-            n_features = effect.numel()
-            if aggregated:
-                n_features *= cfg.example_length
-            k_sparsity = int(threshold * n_features)
+        # if k_sparsity is None:
+        k_sparsity = int(threshold * cfg.example_length)  # dont scale by n_features to ensure that we the same number of features per SAE
         topk = effect.abs().flatten().topk(k_sparsity)
         topk_ind = topk.indices[topk.values > 0]
         if stack:
             return t.stack(t.unravel_index(topk_ind, effect.shape), dim=1).tolist()
         return topk_ind, topk.values[topk.values > 0]
+
+
+def get_empty_edge(device):
+    return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0), (0,)*6, is_coalesced=True).to(device)
+
 
 
 def jvp(
@@ -382,7 +384,7 @@ def jvp(
         intermediate_stop_grads = []
 
     if not downstream_features: # handle empty list
-        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0), (0,)*6, is_coalesced=True).to(model.device)
+        return get_empty_edge(model.device)
 
     # first run through a test input to figure out which hidden states are tuples
     output_submods = {}
@@ -393,12 +395,12 @@ def jvp(
     is_tuple = {k: type(v.shape) == tuple for k, v in output_submods.items()}
 
 
-    if cfg.edge_thresh_type == ThresholdType.SPARSITY:
-        n_enc = dictionaries[upstream_submod].encoder.out_features
-        numel_per_batch = n_enc * input.shape[1]
-        k_sparsity = int(cfg.edge_threshold * numel_per_batch)
-    else:
-        k_sparsity = None
+    # if cfg.edge_thresh_type == ThresholdType.SPARSITY:
+    #     n_enc = dictionaries[upstream_submod].encoder.out_features
+    #     numel_per_batch = n_enc * input.shape[1]
+    #     k_sparsity = int(cfg.edge_threshold * numel_per_batch)
+    # else:
+    #     k_sparsity = None
 
     downstream_dict, upstream_dict = dictionaries[downstream_submod], dictionaries[upstream_submod]
 
@@ -453,7 +455,7 @@ def jvp(
 
             vjv_ind, vjv_val = threshold_effects(vjv, cfg,
                                                  (upstream_submod, downstream_submod),
-                                                 k_sparsity=k_sparsity,
+                                                #  k_sparsity=k_sparsity,
                                                  stack=False)
 
             vjv_indices[downstream_feat] = vjv_ind.save()#(vjv_topk.indices * flat_index_mul)
@@ -465,11 +467,13 @@ def jvp(
     d_downstream_contracted = ((downstream_act.value @ downstream_act.value).to_tensor()).shape
     d_upstream_contracted = ((upstream_act.value @ upstream_act.value).to_tensor()).shape
 
-    if cfg.collect_hists > 0:
-        hist_agg.aggregate_edge_hist(upstream_submod, downstream_submod)
-
     edge_name = [get_submod_repr(m) for m in (upstream_submod, downstream_submod)]
     print(f'\tnnz {edge_name}', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
+
+    if cfg.collect_hists > 0:
+        hist_agg.aggregate_edge_hist(upstream_submod, downstream_submod)
+        return get_empty_edge(model.device)
+
     ## make tensors
     downstream_indices = t.tensor([downstream_feat for downstream_feat in downstream_features
                                 for _ in vjv_indices[tuple(downstream_feat)].value], device=model.device).T
@@ -478,6 +482,6 @@ def jvp(
     vjv_indices = t.cat([downstream_indices, upstream_indices], dim=0).to(model.device)
     vjv_values = t.cat([vjv_values[tuple(downstream_feat)].value for downstream_feat in downstream_features], dim=0)
     if vjv_values.shape[0] == 0:
-        return t.sparse_coo_tensor(t.zeros((6, 0), dtype=t.long), t.zeros(0), (0,)*6, is_coalesced=True).to(model.device)
+        return get_empty_edge(model.device)
 
     return t.sparse_coo_tensor(vjv_indices, vjv_values, (*d_downstream_contracted, *d_upstream_contracted), is_coalesced=True)

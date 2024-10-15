@@ -38,15 +38,109 @@ def get_submod_repr(submod):
     return normalize_path(path)
 
 class ThresholdType(Enum):
-    THRESH = 'thresh'
-    SPARSITY = 'sparsity'
-    Z_SCORE = 'z_score'
-    PEAK_MATCH = 'peak_match'
-    PERCENTILE = 'percentile'
+    THRESH = 'thresh'  # raw threshold that activations must exceed
+    SPARSITY = 'sparsity'   # the number of features to choose per sequence position
+    Z_SCORE = 'z_score'   # how many stds above the mean must the activation be to be considered
+    PEAK_MATCH = 'peak_match'  # uhh....
+    PERCENTILE = 'percentile'   # compute a threshold based on histograms that will say to keep the top thresh % of weights
+
+class Histogram:
+    def __init__(self, n_bins, act_min, act_max, nnz_min, nnz_max, model_str):
+        self.n_bins = n_bins
+        self.act_min = act_min
+        self.act_max = act_max
+        self.nnz_min = nnz_min
+        self.nnz_max = nnz_max  # nnz max for the largest case
+        self.model_str = model_str
+        self.n_samples = 0
+
+        self.nnz = t.zeros(n_bins).cuda()
+        self.acts = t.zeros(n_bins).cuda()
+
+        self.error_nnz = t.zeros(n_bins).cuda()
+        self.error_acts = t.zeros(n_bins).cuda()
+
+        self.first_nnz = t.zeros(n_bins).cuda()
+        self.first_acts = t.zeros(n_bins).cuda()
+
+        self.error_first_nnz = t.zeros(2).cuda()  # 2 bins since it can only be 0 or 1
+        self.error_first_acts = t.zeros(n_bins).cuda()
+
+        self.tracing_nnz = []
+        self.tracing_acts = []
+
+    @t.no_grad()
+    def compute_hist(self, w: t.Tensor):
+        abs_w = abs(w)
+        acts_hist = t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min, max=self.act_max)
+        nnz = (w != 0).sum(dim=2).flatten()
+        nnz_hist = t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min, max=self.nnz_max)
+        return nnz_hist, acts_hist
+
+
+    @t.no_grad()
+    def compute_hist(self, w: t.Tensor, trace=False):
+        self.n_samples += 1
+
+        w_late = w[:, 1:, :-1]
+        nnz, acts = self.compute_hist(w_late)
+
+        w_first = w[:, :1, :-1]  # -1 to avoid "error" term
+        nnz_first, acts_first = self.compute_hist(w_first)
+
+        w_error = w[:, 1:, -1:]
+        nnz_error, acts_error = self.compute_hist(w_error)
+
+        w_first_error = w[:, :1, -1:]
+        _, acts_first_error = self.compute_hist(w_first_error)
+
+        if trace:
+            self.tracing_nnz.append(nnz.save(), nnz_error.save(), nnz_first.save(), w_first_error.save())
+            self.tracing_acts.append(acts.save(), acts_error.save(), acts_first.save(), acts_first_error.save())
+        else:
+            self.nnz += nnz
+            self.acts += acts
+
+            self.first_nnz += nnz_first
+            self.first_acts += acts_first
+
+            self.error_nnz += nnz_error
+            self.error_acts += acts_error
+
+
+    def aggregate_traced(self):
+        for nnz, nnz_error, nnz_first, w_first_error in self.tracing_nnz:
+            self.nnz += nnz.value
+            self.error_nnz += nnz_error.value
+            self.first_nnz += nnz_first.value
+            self.error_first_nnz[0] += (w_first_error.value == 0).sum()
+            self.error_first_nnz[1] += (w_first_error.value != 0).sum()
+
+        for acts, acts_error, acts_first, acts_first_error in self.tracing_acts:
+            self.acts += acts.value
+            self.error_acts += acts_error.value
+            self.first_acts += acts_first.value
+            self.error_first_acts += acts_first_error.value
+
+        self.tracing_nnz.clear()
+        self.tracing_acts.clear()
+
+    def cpu(self):
+        if isinstance(self.nnz, t.Tensor):
+            self.nnz = self.nnz.cpu().numpy()
+            self.acts = self.acts.cpu().numpy()
+            self.error_nnz = self.error_nnz.cpu().numpy()
+            self.error_acts = self.error_acts.cpu().numpy()
+            self.first_nnz = self.first_nnz.cpu().numpy()
+            self.first_acts = self.first_acts.cpu().numpy()
+            self.error_first_nnz = self.error_first_nnz.cpu().numpy()
+            self.error_first_acts = self.error_first_acts.cpu().numpy()
+        return self
+
 
 
 class HistAggregator:
-    def __init__(self, model_str='gpt2', seq_len=64, n_bins=5000, act_min=-10, act_max=10):
+    def __init__(self, model_str='gpt2', seq_len=64, n_bins=10_000, act_min=-10, act_max=5):
         self.n_bins = n_bins
         self.nnz_min = 0
         self.nnz_max = {} # will be set later
@@ -56,106 +150,59 @@ class HistAggregator:
         self.model_str = model_str
         self.n_samples = defaultdict(int)
 
-        self.node_nnz = {}
-        self.node_acts = {}
+        self.nodes: dict[str, Histogram] = {}
+        self.edges: dict[dict[str, Histogram]] = {}
 
-        self.tracing_edge_nnz = []  # to deal with nnsight tracing
-        self.tracing_edge_act = []
-        # self.tracing_raw_edge_act = []
-
-        self.edge_nnz = {}
-        self.edge_acts = {}
-
-        # self.raw_node_acts = {}
-        # self.raw_edge_acts = {}
 
     @t.no_grad()
     def compute_node_hist(self, submod, w: t.Tensor):
         # w: [N, seq_len, n_feats]
         submod = get_submod_repr(submod)
-        if submod not in self.node_nnz:
+        if submod not in self.nodes:
             n_feats = w.shape[2] - 1  # -1 to avoid "error" term
             self.nnz_max[submod] = np.log10(n_feats)
-            self.node_nnz[submod] = t.zeros(self.n_bins).cuda()
-            self.node_acts[submod] = t.zeros(self.n_bins).cuda()
-            # self.raw_node_acts[submod] = []
+            self.nodes[submod] = Histogram(self.n_bins, self.act_min, self.act_max, self.nnz_min,
+                                              self.nnz_max[submod], self.model_str)
 
-        self.n_samples[submod] += 1
-        w_late = w[:, self.seq_len//2:, :-1]   # -1 to avoid error term
-        nnz = (w_late != 0).sum(dim=2).flatten()   # [N, seq_len//2].flatten()
-        abs_w = abs(w_late)
-        self.node_nnz[submod] += t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min, max=self.nnz_max[submod])
-        self.node_acts[submod] += t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min, max=self.act_max)
-        # self.raw_node_acts[submod].append(w.cpu().numpy())
+        self.nodes[submod].compute_hist(w)
 
-    @t.no_grad()
-    def compute_edge_hist(self, up_submod, down_submod, w: t.Tensor):
-        # w: [N, seq_len, n_feat_down]
-        w_late = w[:, self.seq_len//2:, :-1]  # -1 to avoid "error" term
-        nnz = (w_late != 0).sum(dim=2).flatten()
-        abs_w = abs(w_late)
-        nnz_hist = t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min,  # this will implicitly ignore cases where there are no non-zero elements
-                                                           max=self.nnz_max[up_submod])
-        act_hist = t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min,
-                                                           max=self.act_max)
-        return nnz_hist, act_hist
 
     @t.no_grad()
     def trace_edge_hist(self, up_submod, down_submod, vjv):
         up_submod = get_submod_repr(up_submod)
         down_submod = get_submod_repr(down_submod)
 
-        nnz, act = self.compute_edge_hist(up_submod, down_submod, vjv)
-        self.tracing_edge_nnz.append(nnz.save())
-        self.tracing_edge_act.append(act.save())
-        # self.tracing_raw_edge_act.append(vjv.cpu().save())
+        if up_submod not in self.edges:
+            self.edges[up_submod] = {}
+
+        if down_submod not in self.edges[up_submod]:
+            self.edges[up_submod][down_submod] = Histogram(self.n_bins, self.act_min, self.act_max, self.nnz_min,
+                                                            self.nnz_max[up_submod], self.model_str)
+        self.edges[up_submod][down_submod].compute_hist(vjv, trace=True)
 
     @t.no_grad()
     def aggregate_edge_hist(self, up_submod, down_submod):
         up_submod = get_submod_repr(up_submod)
         down_submod = get_submod_repr(down_submod)
 
-        if up_submod not in self.edge_nnz:
-            self.edge_nnz[up_submod] = {}
-            self.edge_acts[up_submod] = {}
-            # self.raw_edge_acts[up_submod] = {}
+        self.edges[up_submod][down_submod].aggregate_traced()
 
-        if down_submod not in self.edge_nnz[up_submod]:
-            self.edge_nnz[up_submod][down_submod] = t.zeros(self.n_bins).cuda()
-            self.edge_acts[up_submod][down_submod] = t.zeros(self.n_bins).cuda()
-            # self.raw_edge_acts[up_submod][down_submod] = []
-
-        # for nnz_hist, act_hist, raw_act in zip(self.tracing_edge_nnz, self.tracing_edge_act, self.tracing_raw_edge_act):
-        for nnz_hist, act_hist in zip(self.tracing_edge_nnz, self.tracing_edge_act):
-            self.edge_nnz[up_submod][down_submod] += nnz_hist.value
-            self.edge_acts[up_submod][down_submod] += act_hist.value
-            # self.raw_edge_acts[up_submod][down_submod].append(raw_act.value.numpy())
-
-        self.tracing_edge_nnz.clear()
-        self.tracing_edge_act.clear()
-        # self.tracing_raw_edge_act.clear()
 
     def cpu(self):
-        for k in self.node_nnz:
-            self.node_nnz[k] = self.node_nnz[k].cpu().numpy()
-            self.node_acts[k] = self.node_acts[k].cpu().numpy()
-        for up in self.edge_nnz:
-            for down in self.edge_nnz[up]:
-                self.edge_nnz[up][down] = self.edge_nnz[up][down].cpu().numpy()
-                self.edge_acts[up][down] = self.edge_acts[up][down].cpu().numpy()
+        for n in self.nodes.values():
+            n.cpu()
+        for up in self.edges:
+            for e in self.edges[up].values():
+                e.cpu()
         return self
 
     def save(self, path):
-        t.save({'node_nnz': self.node_nnz,
-                'node_acts': self.node_acts,
-                'edge_nnz': self.edge_nnz,
-                'edge_acts': self.edge_acts,
+        t.save({'nodes': self.nodes,
+                'edges': self.edges,
                 'nnz_max': self.nnz_max,
                 'act_min_max': (self.act_min, self.act_max),
                 'model_str': self.model_str,
                 'n_samples': self.n_samples,
-                # 'raw_node_acts': self.raw_node_acts,
-                # 'raw_edge_acts': self.raw_edge_acts
                 }, path)
 
     def load(self, path_or_dict, map_location=None):
@@ -167,12 +214,8 @@ class HistAggregator:
                 return None
         else:
             data = path_or_dict
-        self.node_nnz = data['node_nnz']
-        self.node_acts = data['node_acts']
-        self.edge_nnz = data['edge_nnz']
-        self.edge_acts = data['edge_acts']
-        # self.raw_node_acts = data['raw_node_acts']
-        # self.raw_edge_acts = data['raw_edge_acts']
+        self.nodes = data['nodes']
+        self.edges = data['edges']
         self.nnz_max = data['nnz_max']
         self.model_str = data['model_str']
         self.act_min, self.act_max = data['act_min_max']
@@ -182,11 +225,10 @@ class HistAggregator:
             print("Successfully loaded histograms at", path_or_dict)
         return self
 
-
     def get_hist_for_node_effect(self, layer, component, acts_or_nnz):
         mod_name = f'{component}_{layer}'
         if acts_or_nnz == 'acts':
-            hist = self.node_acts[mod_name]
+            hist = self.nodes[mod_name].acts
         else:
             hist = self.node_nnz[mod_name]
 
