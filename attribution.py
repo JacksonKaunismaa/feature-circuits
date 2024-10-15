@@ -333,7 +333,7 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, k_
         effect_name = get_submod_repr(effect_name)
     method = cfg.edge_thresh_type if is_edge else cfg.node_thresh_type
 
-    if method in [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH]:
+    if method in [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH, ThresholdType.PERCENTILE]:
         if is_edge:
             threshold = cfg.edge_thresholds[effect_name[0]][effect_name[1]]
         else:

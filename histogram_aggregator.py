@@ -42,6 +42,7 @@ class ThresholdType(Enum):
     SPARSITY = 'sparsity'
     Z_SCORE = 'z_score'
     PEAK_MATCH = 'peak_match'
+    PERCENTILE = 'percentile'
 
 
 class HistAggregator:
@@ -208,6 +209,11 @@ class HistAggregator:
             case ThresholdType.SPARSITY:
                 percentile_hist = np.cumsum(hist) / hist.sum()
                 thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
+
+            case ThresholdType.PERCENTILE:
+                percentile_hist = np.cumsum(hist) / hist.sum()
+                thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
+
             case ThresholdType.Z_SCORE:
                 mean, _, std = self.get_mean_median_std(hist, bins)
                 thresh_loc = np.searchsorted(bins, mean + thresh * std)

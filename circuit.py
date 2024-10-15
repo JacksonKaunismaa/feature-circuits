@@ -592,7 +592,7 @@ if __name__ == '__main__':
         os.makedirs(args.circuit_dir)
 
     hist_agg = HistAggregator(cfg.model, cfg.example_length)
-    hist_threshold_types = [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH]
+    hist_threshold_types = [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH, ThresholdType.PERCENTILE]
     needs_hist = cfg.node_thresh_type in hist_threshold_types or cfg.edge_thresh_type in hist_threshold_types
     if args.accumulate_hists or needs_hist:
         hist_path = args.histogram_path if args.histogram_path else f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
