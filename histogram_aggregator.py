@@ -1,4 +1,5 @@
 from collections import defaultdict
+import dataclasses
 import os
 from typing import Literal
 import warnings
@@ -37,34 +38,49 @@ def get_submod_repr(submod):
         raise ValueError('submod does not have _module_path or path attribute')
     return normalize_path(path)
 
-class ThresholdType(Enum):
+class ThresholdType(Enum):  # what thresh means in each case
     THRESH = 'thresh'  # raw threshold that activations must exceed
     SPARSITY = 'sparsity'   # the number of features to choose per sequence position
     Z_SCORE = 'z_score'   # how many stds above the mean must the activation be to be considered
-    PEAK_MATCH = 'peak_match'  # uhh....
-    PERCENTILE = 'percentile'   # compute a threshold based on histograms that will say to keep the top thresh % of weights
+    PEAK_MATCH = 'peak_match'  # try to find a raw threshold so that the the thresholded histogram peaks at the thresh, and then decreases after
+    PERCENTILE = 'percentile'   # compute a raw threshold based on histograms that will keep the top thresh % of weights
+
+NEEDS_HIST = [ThresholdType.PEAK_MATCH, ThresholdType.PERCENTILE, ThresholdType.Z_SCORE]
+
+class PlotType(Enum):
+    REGULAR = 'regular'
+    FIRST = 'first'
+    ERROR = 'error'
+    FIRST_ERROR = 'first_error'
+
+@dataclasses.dataclass
+class HistogramSettings:
+    n_bins: int = 10_000
+    act_min: float = -10
+    act_max: float = 5
+    nnz_min: float = 0
+    nnz_max: dict[str, float] = dataclasses.field(default_factory=dict)
+    n_feats: dict[str, int] = dataclasses.field(default_factory=dict)
 
 class Histogram:
-    def __init__(self, n_bins, act_min, act_max, nnz_min, nnz_max, model_str):
-        self.n_bins = n_bins
-        self.act_min = act_min
-        self.act_max = act_max
-        self.nnz_min = nnz_min
-        self.nnz_max = nnz_max  # nnz max for the largest case
-        self.model_str = model_str
+    def __init__(self, submod: str, settings: HistogramSettings):
+        self.submod = submod
+        self.settings = settings
         self.n_samples = 0
 
-        self.nnz = t.zeros(n_bins).cuda()
-        self.acts = t.zeros(n_bins).cuda()
+        self.nnz = t.zeros(settings.n_bins).cuda()
+        self.acts = t.zeros(settings.n_bins).cuda()
 
-        self.error_nnz = t.zeros(n_bins).cuda()
-        self.error_acts = t.zeros(n_bins).cuda()
+        self.error_nnz = t.zeros(settings.n_bins).cuda()
+        self.error_acts = t.zeros(settings.n_bins).cuda()
 
-        self.first_nnz = t.zeros(n_bins).cuda()
-        self.first_acts = t.zeros(n_bins).cuda()
+        self.first_nnz = t.zeros(settings.n_bins).cuda()
+        self.first_acts = t.zeros(settings.n_bins).cuda()
 
         self.error_first_nnz = t.zeros(2).cuda()  # 2 bins since it can only be 0 or 1
-        self.error_first_acts = t.zeros(n_bins).cuda()
+        self.error_first_acts = t.zeros(settings.n_bins).cuda()
+
+        self.thresholds = {}
 
         self.tracing_nnz = []
         self.tracing_acts = []
@@ -72,14 +88,18 @@ class Histogram:
     @t.no_grad()
     def compute_hist(self, w: t.Tensor):
         abs_w = abs(w)
-        acts_hist = t.histc(t.log10(abs_w[abs_w != 0]), bins=self.n_bins, min=self.act_min, max=self.act_max)
+        acts_hist = t.histc(t.log10(abs_w[abs_w != 0]), bins=self.settings.n_bins,
+                            min=self.settings.act_min, max=self.settings.act_max)
         nnz = (w != 0).sum(dim=2).flatten()
-        nnz_hist = t.histc(t.log10(nnz), bins=self.n_bins, min=self.nnz_min, max=self.nnz_max)
+        # this will implicitly ignore cases where there are no non-zero elements
+        # since 0s -> -inf through the log10, which is less than the min
+        nnz_hist = t.histc(t.log10(nnz), bins=self.settings.n_bins, min=self.settings.nnz_min,
+                           max=self.settings.nnz_max[self.submod])
         return nnz_hist, acts_hist
 
 
     @t.no_grad()
-    def compute_hist(self, w: t.Tensor, trace=False):
+    def compute_hists(self, w: t.Tensor, trace=False):
         self.n_samples += 1
 
         w_late = w[:, 1:, :-1]
@@ -89,14 +109,14 @@ class Histogram:
         nnz_first, acts_first = self.compute_hist(w_first)
 
         w_error = w[:, 1:, -1:]
-        nnz_error, acts_error = self.compute_hist(w_error)
+        nnz_error, acts_error = self.compute_hist(w_error)  # nnz_error is pretty uninformative
 
         w_first_error = w[:, :1, -1:]
         _, acts_first_error = self.compute_hist(w_first_error)
 
         if trace:
-            self.tracing_nnz.append(nnz.save(), nnz_error.save(), nnz_first.save(), w_first_error.save())
-            self.tracing_acts.append(acts.save(), acts_error.save(), acts_first.save(), acts_first_error.save())
+            self.tracing_nnz.append((nnz.save(), nnz_error.save(), nnz_first.save(), w_first_error.save()))
+            self.tracing_acts.append((acts.save(), acts_error.save(), acts_first.save(), acts_first_error.save()))
         else:
             self.nnz += nnz
             self.acts += acts
@@ -106,6 +126,10 @@ class Histogram:
 
             self.error_nnz += nnz_error
             self.error_acts += acts_error
+
+            self.error_first_nnz[0] += (w_first_error == 0).sum()
+            self.error_first_nnz[1] += (w_first_error != 0).sum()
+            self.error_first_acts += acts_first_error
 
 
     def aggregate_traced(self):
@@ -137,16 +161,80 @@ class Histogram:
             self.error_first_acts = self.error_first_acts.cpu().numpy()
         return self
 
+    def select_hist_type(self, acts_or_nnz, hist_type: PlotType):
+        match hist_type:
+            case PlotType.REGULAR:
+                hist = self.acts if acts_or_nnz == 'acts' else self.nnz
+            case PlotType.FIRST:
+                hist = self.first_acts if acts_or_nnz == 'acts' else self.first_nnz
+            case PlotType.ERROR:
+                hist = self.error_acts if acts_or_nnz == 'acts' else self.error_nnz
+            case PlotType.FIRST_ERROR:
+                hist = self.error_first_acts if acts_or_nnz == 'acts' else self.error_first_nnz
+        return hist
+
+    def get_mean_median_std(self, hist: t.Tensor, bins: t.Tensor):
+        total = hist.sum()
+        median_idx = (hist.cumsum() >= total / 2).nonzero()[0][0]
+        median_val = bins[median_idx]
+        mean = (bins * hist).sum() / total
+        # compute variance of activations
+        std = np.sqrt(((bins - mean)**2 * hist).sum() / total)
+        return mean, median_val, std
+
+    def get_threshold(self, bins, acts_or_nnz, hist_type, thresh, thresh_type):
+        if acts_or_nnz == 'nnz':
+            raise ValueError("Cannot compute threshold for nnz")
+
+        hist = self.select_hist_type(acts_or_nnz, hist_type)
+        match thresh_type:
+            case ThresholdType.THRESH:
+                thresh_loc = np.searchsorted(bins, np.log10(thresh))
+
+            case ThresholdType.SPARSITY:
+                percentile_hist = np.cumsum(hist) / hist.sum()
+                thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
+
+            case ThresholdType.PERCENTILE:
+                percentile_hist = np.cumsum(hist) / hist.sum()
+                thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
+
+            case ThresholdType.Z_SCORE:
+                mean, _, std = self.get_mean_median_std(hist, bins)
+                thresh_loc = np.searchsorted(bins, mean + thresh * std)
+
+            case ThresholdType.PEAK_MATCH:
+                thresh_loc = None
+                best_diff = np.inf
+                for b in range(1, len(hist)):
+                    thresh_peak = hist[b:].max()
+                    hist_diff = np.abs(thresh_peak - thresh)
+                    if hist_diff < best_diff:
+                        best_diff = hist_diff
+                        thresh_loc = b
+        return thresh_loc
+
+    def compute_thresholds(self, thresh, thresh_type):
+        self.thresholds = {}
+        bins = np.linspace(self.settings.act_min, self.settings.act_max, self.settings.n_bins)
+        for hist_type in PlotType:
+            self.thresholds[hist_type] = 10**self.get_threshold(bins, 'acts', hist_type, thresh, thresh_type)
+        return self.thresholds
+
+    def threshold(self, w: t.Tensor):
+        abs_w = abs(w)
+        thresh_w = t.zeros_like(abs_w, dtype=t.bool, device=w.device)
+        thresh_w[:, 1:, :-1] = abs_w[:, 1:, :-1] > self.thresholds[PlotType.REGULAR]
+        thresh_w[:, :1, :-1] = abs_w[:, :1, :-1] > self.thresholds[PlotType.FIRST]
+        thresh_w[:, 1:, -1:] = abs_w[:, 1:, -1:] > self.thresholds[PlotType.ERROR]
+        thresh_w[:, :1, -1:] = abs_w[:, :1, -1:] > self.thresholds[PlotType.FIRST_ERROR]
+
+        return t.nonzero(thresh_w.flatten()).flatten()
 
 
 class HistAggregator:
-    def __init__(self, model_str='gpt2', seq_len=64, n_bins=10_000, act_min=-10, act_max=5):
-        self.n_bins = n_bins
-        self.nnz_min = 0
-        self.nnz_max = {} # will be set later
-        self.act_min = act_min   # power of 10
-        self.act_max = act_max
-        self.seq_len = seq_len
+    def __init__(self, model_str='gpt2', n_bins=10_000, act_min=-10, act_max=5):
+        self.settings = HistogramSettings(n_bins=n_bins, act_min=act_min, act_max=act_max)
         self.model_str = model_str
         self.n_samples = defaultdict(int)
 
@@ -159,12 +247,11 @@ class HistAggregator:
         # w: [N, seq_len, n_feats]
         submod = get_submod_repr(submod)
         if submod not in self.nodes:
-            n_feats = w.shape[2] - 1  # -1 to avoid "error" term
-            self.nnz_max[submod] = np.log10(n_feats)
-            self.nodes[submod] = Histogram(self.n_bins, self.act_min, self.act_max, self.nnz_min,
-                                              self.nnz_max[submod], self.model_str)
+            self.settings.n_feats[submod] = w.shape[2]
+            self.settings.nnz_max[submod] = np.log10(self.settings.n_feats[submod]-1) # -1 to avoid "error" term
+            self.nodes[submod] = Histogram(submod, self.settings)
 
-        self.nodes[submod].compute_hist(w)
+        self.nodes[submod].compute_hists(w)
 
 
     @t.no_grad()
@@ -176,9 +263,9 @@ class HistAggregator:
             self.edges[up_submod] = {}
 
         if down_submod not in self.edges[up_submod]:
-            self.edges[up_submod][down_submod] = Histogram(self.n_bins, self.act_min, self.act_max, self.nnz_min,
-                                                            self.nnz_max[up_submod], self.model_str)
-        self.edges[up_submod][down_submod].compute_hist(vjv, trace=True)
+            self.edges[up_submod][down_submod] = Histogram(up_submod, self.settings)
+
+        self.edges[up_submod][down_submod].compute_hists(vjv, trace=True)
 
     @t.no_grad()
     def aggregate_edge_hist(self, up_submod, down_submod):
@@ -199,10 +286,9 @@ class HistAggregator:
     def save(self, path):
         t.save({'nodes': self.nodes,
                 'edges': self.edges,
-                'nnz_max': self.nnz_max,
-                'act_min_max': (self.act_min, self.act_max),
-                'model_str': self.model_str,
                 'n_samples': self.n_samples,
+                'settings': self.settings,
+                'model_str': self.model_str,
                 }, path)
 
     def load(self, path_or_dict, map_location=None):
@@ -216,59 +302,23 @@ class HistAggregator:
             data = path_or_dict
         self.nodes = data['nodes']
         self.edges = data['edges']
-        self.nnz_max = data['nnz_max']
         self.model_str = data['model_str']
-        self.act_min, self.act_max = data['act_min_max']
-        self.n_bins = list(self.node_nnz.values())[0].shape[0]
+        self.settings = data['settings']
         self.n_samples = data['n_samples']
         if isinstance(path_or_dict, str):
             print("Successfully loaded histograms at", path_or_dict)
         return self
 
-    def get_hist_for_node_effect(self, layer, component, acts_or_nnz):
+    def get_hist_for_node_effect(self, layer, component, acts_or_nnz, plot_type: PlotType):
         mod_name = f'{component}_{layer}'
-        if acts_or_nnz == 'acts':
-            hist = self.nodes[mod_name].acts
-        else:
-            hist = self.node_nnz[mod_name]
-
-        feat_size = int(np.round(10**self.nnz_max[mod_name]))
+        hist = self.nodes[mod_name].select_hist_type(acts_or_nnz, plot_type)
+        feat_size = self.settings.n_feats[mod_name]
         return hist, feat_size
 
-    def get_mean_median_std(self, hist, bins):
-        total = hist.sum()
-        median_idx = (hist.cumsum() >= total / 2).nonzero()[0][0]
-        median_val = bins[median_idx]
-        mean = (bins * hist).sum() / total
-        # compute variance of activations
-        std = np.sqrt(((bins - mean)**2 * hist).sum() / total)
-        return mean, median_val, std
-
-    def get_threshold(self, hist, bins, thresh, thresh_type):
-        match thresh_type:
-            case ThresholdType.THRESH:
-                thresh_loc = np.searchsorted(bins, np.log10(thresh))
-            case ThresholdType.SPARSITY:
-                percentile_hist = np.cumsum(hist) / hist.sum()
-                thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
-
-            case ThresholdType.PERCENTILE:
-                percentile_hist = np.cumsum(hist) / hist.sum()
-                thresh_loc = np.searchsorted(percentile_hist, 1-thresh)
-
-            case ThresholdType.Z_SCORE:
-                mean, _, std = self.get_mean_median_std(hist, bins)
-                thresh_loc = np.searchsorted(bins, mean + thresh * std)
-            case ThresholdType.PEAK_MATCH:
-                thresh_loc = None
-                best_diff = np.inf
-                for b in range(1, len(hist)):
-                    thresh_peak = hist[b:].max()
-                    hist_diff = np.abs(thresh_peak - thresh)
-                    if hist_diff < best_diff:
-                        best_diff = hist_diff
-                        thresh_loc = b
-        return thresh_loc
+    def get_hist_for_edge_effect(self, up:str, down: str, acts_or_nnz, plot_type: PlotType):
+        hist = self.edges[up][down].select_hist_type(acts_or_nnz, plot_type)
+        feat_size = self.settings.n_feats[up]
+        return hist, feat_size
 
     def get_hist_settings(self, hist, n_feats, acts_or_nnz='acts', thresh=None, thresh_type=None):
         if acts_or_nnz == 'acts':
@@ -313,36 +363,25 @@ class HistAggregator:
         ax.text(median+0.5, hist.max(), f'{median:.2f} +- {std:.2f}', color='r')
 
     def compute_edge_thresholds(self, thresh: float, thresh_type: ThresholdType):
-        thresh_vals = {}
-        for up in self.edge_acts:
-            thresh_vals[up] = {}
-            for down in self.edge_acts[up]:
-                hist = self.edge_acts[up][down]
-                feat_size = 10**self.nnz_max[up]
-                hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts')
-                thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
-                thresh_vals[up][down] = 10**bins[thresh_loc]
-        return thresh_vals
+        for up in self.edges:
+            for hist in self.edges[up].values():
+                hist.compute_thresholds(thresh, thresh_type)
 
     def compute_node_thresholds(self, thresh: float, thresh_type: ThresholdType):
-        thresh_vals = {}
-        for mod_name in self.node_acts:
-            hist = self.node_acts[mod_name]
-            feat_size = 10**self.nnz_max[mod_name]
-            hist, bins, _, _, _ = self.get_hist_settings(hist, feat_size, 'acts')
-            thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
-            thresh_vals[mod_name] = 10**bins[thresh_loc]
-        return thresh_vals
-
+        for mod_name in self.nodes:
+            hist = self.nodes[mod_name]
+            hist.compute_thresholds(thresh, thresh_type)
 
     def plot(self, n_layers, nodes_or_edges: Literal['nodes', 'edges']='nodes',
-             acts_or_nnz:Literal['acts', 'nnz'] ='acts', thresh=None, thresh_type=ThresholdType.THRESH):
+             acts_or_nnz:Literal['acts', 'nnz'] ='acts', plot_type: PlotType = PlotType.REGULAR,
+             thresh=None, thresh_type=ThresholdType.THRESH):
+
         if nodes_or_edges == 'nodes':
             fig, axs = plt.subplots(n_layers, 3, figsize=(18, 3.6*n_layers))
 
             for layer in range(n_layers):
                 for i, component in enumerate(['resid', 'attn', 'mlp']):
-                    hist, feat_size = self.get_hist_for_node_effect(layer, component, acts_or_nnz)
+                    hist, feat_size = self.get_hist_for_node_effect(layer, component, acts_or_nnz, plot_type)
                     hist, bins, xlabel, median, std = self.get_hist_settings(hist, feat_size, acts_or_nnz, thresh, thresh_type)
                     self.plot_hist(hist, median, std, bins, axs[layer, i], xlabel, f'{self.model_str} {component} layer {layer}')
 
@@ -351,12 +390,11 @@ class HistAggregator:
             first_component = 'attn_0' if self.model_str == 'gpt2' else 'embed'
             fig, axs = plt.subplots(n_layers, edges_per_layer, figsize=(6*edges_per_layer, 3.6*n_layers))
 
-            edges_hists = self.edge_acts if acts_or_nnz == 'acts' else self.edge_nnz
 
             for layer in range(n_layers):
-                for i, (up, down) in enumerate(iterate_edges(edges_hists, layer, first_component)):
-                    hist = edges_hists[up][down]
-                    hist, bins, xlabel, median, std = self.get_hist_settings(hist, 10**self.nnz_max[up], acts_or_nnz, thresh, thresh_type)
+                for i, (up, down) in enumerate(iterate_edges(self.edges, layer, first_component)):
+                    hist = self.get_hist_for_edge_effect(up, down, acts_or_nnz, plot_type)
+                    hist, bins, xlabel, median, std = self.get_hist_settings(hist, 10**self.settings.nnz_max[up], acts_or_nnz, thresh, thresh_type)
                     self.plot_hist(hist, median, std, bins, axs[layer, i], xlabel, f'{self.model_str} layer {layer} edge {(up, down)}')
 
 

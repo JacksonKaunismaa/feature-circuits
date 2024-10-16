@@ -6,7 +6,7 @@ from typing import Dict, Union
 import torch
 
 from config import Config
-from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
+from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr, NEEDS_HIST
 from activation_utils import SparseAct
 
 DEBUGGING = False
@@ -304,8 +304,7 @@ def patching_effect(
         raise ValueError(f"Unknown method {method}")
 
 
-def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, #k_sparsity: int | None =None,
-                      aggregated=False):
+def threshold_effects(effect: t.Tensor, cfg: Config, effect_name: str | tuple[str], hist_agg: HistAggregator, stack=True):
     """
     Return the indices of the top-k features with the highest absolute effect, or if as_threshold is True, the indices
     of the features with absolute effect greater than threshold.
@@ -333,22 +332,15 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, #k
         effect_name = get_submod_repr(effect_name)
     method = cfg.edge_thresh_type if is_edge else cfg.node_thresh_type
 
-    if method in [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH, ThresholdType.PERCENTILE]:
+    if method in NEEDS_HIST:
         if is_edge:
-            threshold = cfg.edge_thresholds[effect_name[0]][effect_name[1]]
+            hist = hist_agg.edges[effect_name[0]][effect_name[1]]
         else:
-            threshold = cfg.node_thresholds[effect_name]
-        method = ThresholdType.THRESH
+            hist = hist_agg.nodes[effect_name]
     else:
         threshold = cfg.edge_threshold if is_edge else cfg.node_threshold
 
-    if method == ThresholdType.THRESH:
-        ind = t.nonzero(effect.flatten().abs() > threshold).flatten()
-        if stack:
-            return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()
-        return ind, effect.flatten()[ind]
-
-    else:  # as_sparsity
+    if method == ThresholdType.SPARSITY:
         # if k_sparsity is None:
         k_sparsity = int(threshold * cfg.example_length)  # dont scale by n_features to ensure that we the same number of features per SAE
         topk = effect.abs().flatten().topk(k_sparsity)
@@ -356,6 +348,18 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name, stack=True, #k
         if stack:
             return t.stack(t.unravel_index(topk_ind, effect.shape), dim=1).tolist()
         return topk_ind, topk.values[topk.values > 0]
+
+    if method in NEEDS_HIST:
+        ind = hist.threshold(effect)
+    elif method == ThresholdType.THRESH:
+        ind = t.nonzero(effect.flatten().abs() > threshold).flatten()
+    else:
+        raise ValueError(f"Unknown thresholding method {method}")
+
+    if stack:
+        return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()
+    return ind, effect.flatten()[ind]
+
 
 
 def get_empty_edge(device):
@@ -455,7 +459,7 @@ def jvp(
 
             vjv_ind, vjv_val = threshold_effects(vjv, cfg,
                                                  (upstream_submod, downstream_submod),
-                                                #  k_sparsity=k_sparsity,
+                                                 hist_agg,
                                                  stack=False)
 
             vjv_indices[downstream_feat] = vjv_ind.save()#(vjv_topk.indices * flat_index_mul)

@@ -14,7 +14,7 @@ from nnsight import LanguageModel
 from dictionary_learning import AutoEncoder
 from dictionary_learning.dictionary import IdentityDict
 
-from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
+from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr, NEEDS_HIST
 from activation_utils import SparseAct
 from attribution import patching_effect, jvp, threshold_effects
 from circuit_plotting import plot_circuit, plot_circuit_posaligned
@@ -157,6 +157,11 @@ def aggregate_nodes_edges(nodes, edges, dims: tuple[int], divisor_dim: int=None,
             n.resc = n.resc[slices]
 
 
+def clear_cache():
+    t.cuda.empty_cache()
+    gc.collect()
+
+
 def get_circuit(
         clean,
         patch,
@@ -187,14 +192,14 @@ def get_circuit(
         method=cfg.method # get better approximations for early layers by using ig
     )
 
-    t.cuda.empty_cache()  # helps a bit with memory management
+    clear_cache()  # helps a bit with memory management
 
     features_by_submod = {}
     for submod in all_submods:
         effect = effects[submod].to_tensor()
         if cfg.collect_hists > 0:
             hist_agg.compute_node_hist(submod, effect)
-        features_by_submod[submod] = threshold_effects(effect, cfg, submod)
+        features_by_submod[submod] = threshold_effects(effect, cfg, submod, hist_agg)
         print('\tn_feats', get_submod_repr(submod), len(features_by_submod[submod]))
 
     # submodule -> list of indices
@@ -275,6 +280,7 @@ def get_circuit(
         edges[upstream_name][f'attn_{layer}'] = RA_effect
         edges[upstream_name][f'resid_{layer}'] = RR_effect
         print("layer done", layer)
+        clear_cache()
 
     if cfg.aggregation == 'sum':
         # aggregate across sequence position
@@ -592,18 +598,19 @@ if __name__ == '__main__':
         os.makedirs(args.circuit_dir)
 
     hist_agg = HistAggregator(cfg.model, cfg.example_length)
-    hist_threshold_types = [ThresholdType.Z_SCORE, ThresholdType.PEAK_MATCH, ThresholdType.PERCENTILE]
-    needs_hist = cfg.node_thresh_type in hist_threshold_types or cfg.edge_thresh_type in hist_threshold_types
+
+    needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
+
     if args.accumulate_hists or needs_hist:
         hist_path = args.histogram_path if args.histogram_path else f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
         ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
         if ret_val is None and needs_hist:
             raise ValueError("Threshold method requires histogram, but no existing histogram was found. Please run with --collect_hists first.")
 
-    if cfg.node_thresh_type in hist_threshold_types:
+    if cfg.node_thresh_type in NEEDS_HIST:
         cfg.node_thresholds = hist_agg.compute_node_thresholds(cfg.node_threshold, cfg.node_thresh_type)
 
-    if cfg.edge_thresh_type in hist_threshold_types:
+    if cfg.edge_thresh_type in NEEDS_HIST:
         cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
 
     if cfg.seed is not None:
