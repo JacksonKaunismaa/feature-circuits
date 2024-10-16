@@ -254,8 +254,7 @@ class HistAggregator:
         self.nodes[submod].compute_hists(w)
 
 
-    @t.no_grad()
-    def trace_edge_hist(self, up_submod, down_submod, vjv):
+    def get_edge_hist(self, up_submod, down_submod) -> Histogram:
         up_submod = get_submod_repr(up_submod)
         down_submod = get_submod_repr(down_submod)
 
@@ -265,15 +264,7 @@ class HistAggregator:
         if down_submod not in self.edges[up_submod]:
             self.edges[up_submod][down_submod] = Histogram(up_submod, self.settings)
 
-        self.edges[up_submod][down_submod].compute_hists(vjv, trace=True)
-
-    @t.no_grad()
-    def aggregate_edge_hist(self, up_submod, down_submod):
-        up_submod = get_submod_repr(up_submod)
-        down_submod = get_submod_repr(down_submod)
-
-        self.edges[up_submod][down_submod].aggregate_traced()
-
+        return self.edges[up_submod][down_submod]
 
     def cpu(self):
         for n in self.nodes.values():

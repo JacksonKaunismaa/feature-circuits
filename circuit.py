@@ -623,8 +623,7 @@ if __name__ == '__main__':
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
             if cfg.collect_hists > 0:
-                if i %  5 == 0 or i >= cfg.collect_hists:
-                    hist_agg.save(hist_path)
+                hist_agg.save(hist_path)
                 if i >= cfg.collect_hists:
                     break
     else:

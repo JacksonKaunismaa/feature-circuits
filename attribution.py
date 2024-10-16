@@ -411,6 +411,9 @@ def jvp(
     vjv_indices = {}
     vjv_values = {}
 
+    if cfg.collect_hists > 0:
+        hist = hist_agg.get_edge_hist(upstream_submod, downstream_submod)
+
     with model.trace(input, **tracer_kwargs):
         # first specify forward pass modifications
         x = upstream_submod.output.save()
@@ -454,7 +457,7 @@ def jvp(
             #     break
 
             if cfg.collect_hists > 0:
-                hist_agg.trace_edge_hist(upstream_submod, downstream_submod, vjv)
+                hist.compute_hists(vjv, trace=True)
 
 
             vjv_ind, vjv_val = threshold_effects(vjv, cfg,
@@ -475,7 +478,7 @@ def jvp(
     print(f'\tnnz {edge_name}', sum(vjv_indices[tuple(downstream_feat)].shape[0] for downstream_feat in downstream_features))
 
     if cfg.collect_hists > 0:
-        hist_agg.aggregate_edge_hist(upstream_submod, downstream_submod)
+        hist.aggregate_traced()
         return get_empty_edge(model.device)
 
     ## make tensors
