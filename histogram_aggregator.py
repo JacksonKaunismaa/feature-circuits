@@ -276,6 +276,8 @@ class HistAggregator:
     def compute_node_hist(self, submod, w: t.Tensor):
         # w: [N, seq_len, n_feats]
         submod = get_submod_repr(submod)
+        if submod == 'resid_11':
+            pass
         if submod not in self.nodes:
             self.settings.n_feats[submod] = w.shape[2]
             self.settings.nnz_max[submod] = np.log10(self.settings.n_feats[submod]-1) # -1 to avoid "error" term
@@ -338,33 +340,6 @@ class HistAggregator:
     def get_hist_for_edge_effect(self, up:str, down: str, acts_or_nnz, plot_type: PlotType, thresh=None, thresh_type=None):
         hist = self.edges[up][down]#.select_hist_type(acts_or_nnz, plot_type)
         return hist.get_hist_settings(acts_or_nnz, plot_type, thresh, thresh_type)
-
-    def get_hist_settings(self, hist, n_feats, acts_or_nnz='acts', thresh=None, thresh_type=None):
-        if acts_or_nnz == 'acts':
-            min_val = self.settings.act_min
-            max_val = self.settings.act_max
-            xlabel = 'log10(Activation magnitude)'
-            bins = np.linspace(min_val, max_val, self.n_bins)
-        else:
-            min_val = 0
-            xlabel = 'NNZ'
-            max_val = np.log10(n_feats)
-            bins = 10 ** (np.linspace(min_val, max_val, self.settings.n_bins))
-            max_index = np.nonzero(hist)[0].max()
-            max_val = bins[max_index]
-            bins = bins[:max_index+1]
-            hist = hist[:max_index+1]
-
-        if thresh is not None:
-            if acts_or_nnz == 'nnz':
-                raise ValueError("Cannot compute threshold for nnz")
-            else:
-                thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
-                hist = hist.copy()
-                hist[:thresh_loc-1] = 0
-
-        _, median_val, std = self.get_mean_median_std(hist, bins)
-        return hist, bins, xlabel, median_val, std
 
     def plot_hist(self, hist, median, std, bins, ax, xlabel, title):
         value_hist_color = 'blue'

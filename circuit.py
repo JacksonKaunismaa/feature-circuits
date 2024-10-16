@@ -597,7 +597,7 @@ if __name__ == '__main__':
     if not os.path.exists(args.circuit_dir):
         os.makedirs(args.circuit_dir)
 
-    hist_agg = HistAggregator(cfg.model, cfg.example_length)
+    hist_agg = HistAggregator(cfg.model)
 
     needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
 
