@@ -614,12 +614,13 @@ if __name__ == '__main__':
         cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
 
     if cfg.seed is not None:
-        print("Setting random seed to", cfg.seed)
         random.seed(cfg.seed)
     random.shuffle(examples)
 
     if args.data_type == 'hf':
-        for i ,example in tqdm(enumerate(examples)):
+        for i, example in tqdm(enumerate(examples)):
+            if not example:
+                continue
             example_basename = save_basename + f"_{example[0]['document_idx']}"
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)

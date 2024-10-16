@@ -433,7 +433,7 @@ def jvp(
         y_res = y - y_hat
         downstream_act = SparseAct(act=g, res=y_res).save()
 
-        to_backprops = (left_vec @ downstream_act).to_tensor()#.flatten()
+        to_backprops = (left_vec @ downstream_act).to_tensor()
 
         for downstream_feat in downstream_features:
             downstream_feat = tuple(downstream_feat)
@@ -448,14 +448,6 @@ def jvp(
             vjv = (upstream_act.grad @ right_vec).to_tensor() # eq 5 is vjv
             to_backprops[downstream_feat].backward(retain_graph=True)
 
-            # if upstream_submod._module_path == '.gpt_neox.layers.5.attention' and downstream_submod._module_path == '.gpt_neox.layers.5.mlp':
-            #     to_backprops = to_backprops.save()
-            #     upstream_act = upstream_act.save()
-            #     upstream_grad = upstream_act.grad.save()
-            #     vjv_saved = (upstream_act.grad @ right_vec).save()
-            #     vjv = vjv.save()
-            #     break
-
             if cfg.collect_hists > 0:
                 hist.compute_hists(vjv, trace=True)
 
@@ -465,7 +457,7 @@ def jvp(
                                                  hist_agg,
                                                  stack=False)
 
-            vjv_indices[downstream_feat] = vjv_ind.save()#(vjv_topk.indices * flat_index_mul)
+            vjv_indices[downstream_feat] = vjv_ind.save()
             vjv_values[downstream_feat] = vjv_val.save()
 
     # construct return values
