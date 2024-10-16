@@ -614,6 +614,7 @@ if __name__ == '__main__':
         cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
 
     if cfg.seed is not None:
+        print("Setting random seed to", cfg.seed)
         random.seed(cfg.seed)
     random.shuffle(examples)
 

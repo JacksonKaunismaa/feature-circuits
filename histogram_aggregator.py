@@ -173,6 +173,36 @@ class Histogram:
                 hist = self.error_first_acts if acts_or_nnz == 'acts' else self.error_first_nnz
         return hist
 
+    def get_hist_settings(self, acts_or_nnz='acts', plot_type=PlotType.REGULAR, thresh=None, thresh_type=None):
+
+        hist = self.select_hist_type(acts_or_nnz, plot_type)
+
+        if acts_or_nnz == 'acts':
+            min_val = self.settings.act_min
+            max_val = self.settings.act_max
+            xlabel = 'log10(Activation magnitude)'
+            bins = np.linspace(min_val, max_val, self.settings.n_bins)
+        else:
+            min_val = 0
+            xlabel = 'NNZ'
+            max_val = np.log10(self.settings.n_feats[self.submod])
+            bins = 10 ** (np.linspace(min_val, max_val, self.settings.n_bins))
+            max_index = np.nonzero(hist)[0].max()
+            max_val = bins[max_index]
+            bins = bins[:max_index+1]
+            hist = hist[:max_index+1]
+
+        if thresh is not None:
+            if acts_or_nnz == 'nnz':
+                raise ValueError("Cannot compute threshold for nnz")
+            else:
+                thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
+                hist = hist.copy()
+                hist[:thresh_loc-1] = 0
+
+        _, median_val, std = self.get_mean_median_std(hist, bins)
+        return hist, bins, xlabel, median_val, std
+
     def get_mean_median_std(self, hist: t.Tensor, bins: t.Tensor):
         total = hist.sum()
         median_idx = (hist.cumsum() >= total / 2).nonzero()[0][0]
@@ -300,28 +330,26 @@ class HistAggregator:
             print("Successfully loaded histograms at", path_or_dict)
         return self
 
-    def get_hist_for_node_effect(self, layer, component, acts_or_nnz, plot_type: PlotType):
+    def get_hist_for_node_effect(self, layer, component, acts_or_nnz, plot_type: PlotType, thresh=None, thresh_type=None):
         mod_name = f'{component}_{layer}'
-        hist = self.nodes[mod_name].select_hist_type(acts_or_nnz, plot_type)
-        feat_size = self.settings.n_feats[mod_name]
-        return hist, feat_size
+        hist = self.nodes[mod_name]
+        return hist.get_hist_settings(acts_or_nnz, plot_type, thresh, thresh_type)
 
-    def get_hist_for_edge_effect(self, up:str, down: str, acts_or_nnz, plot_type: PlotType):
-        hist = self.edges[up][down].select_hist_type(acts_or_nnz, plot_type)
-        feat_size = self.settings.n_feats[up]
-        return hist, feat_size
+    def get_hist_for_edge_effect(self, up:str, down: str, acts_or_nnz, plot_type: PlotType, thresh=None, thresh_type=None):
+        hist = self.edges[up][down]#.select_hist_type(acts_or_nnz, plot_type)
+        return hist.get_hist_settings(acts_or_nnz, plot_type, thresh, thresh_type)
 
     def get_hist_settings(self, hist, n_feats, acts_or_nnz='acts', thresh=None, thresh_type=None):
         if acts_or_nnz == 'acts':
-            min_val = self.act_min
-            max_val = self.act_max
+            min_val = self.settings.act_min
+            max_val = self.settings.act_max
             xlabel = 'log10(Activation magnitude)'
             bins = np.linspace(min_val, max_val, self.n_bins)
         else:
             min_val = 0
             xlabel = 'NNZ'
             max_val = np.log10(n_feats)
-            bins = 10 ** (np.linspace(min_val, max_val, self.n_bins))
+            bins = 10 ** (np.linspace(min_val, max_val, self.settings.n_bins))
             max_index = np.nonzero(hist)[0].max()
             max_val = bins[max_index]
             bins = bins[:max_index+1]
@@ -372,8 +400,8 @@ class HistAggregator:
 
             for layer in range(n_layers):
                 for i, component in enumerate(['resid', 'attn', 'mlp']):
-                    hist, feat_size = self.get_hist_for_node_effect(layer, component, acts_or_nnz, plot_type)
-                    hist, bins, xlabel, median, std = self.get_hist_settings(hist, feat_size, acts_or_nnz, thresh, thresh_type)
+                    hist, bins, xlabel, median, std = self.get_hist_for_node_effect(layer, component, acts_or_nnz,
+                                                                                    plot_type, thresh, thresh_type)
                     self.plot_hist(hist, median, std, bins, axs[layer, i], xlabel, f'{self.model_str} {component} layer {layer}')
 
         elif nodes_or_edges == 'edges':
@@ -384,8 +412,7 @@ class HistAggregator:
 
             for layer in range(n_layers):
                 for i, (up, down) in enumerate(iterate_edges(self.edges, layer, first_component)):
-                    hist = self.get_hist_for_edge_effect(up, down, acts_or_nnz, plot_type)
-                    hist, bins, xlabel, median, std = self.get_hist_settings(hist, 10**self.settings.nnz_max[up], acts_or_nnz, thresh, thresh_type)
+                    hist, bins, xlabel, median, std = self.get_hist_for_edge_effect(up, down, acts_or_nnz, plot_type, thresh, thresh_type)
                     self.plot_hist(hist, median, std, bins, axs[layer, i], xlabel, f'{self.model_str} layer {layer} edge {(up, down)}')
 
 
