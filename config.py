@@ -18,6 +18,7 @@ class Config:
     aggregation: Literal['none', 'sum'] = 'sum'
     prune_method: Literal['none', 'source-sink', 'sink-backwards', 'first-layer-sink'] = 'none'
     collect_hists: int = 0  # if > 0 then collect histograms for the first collect_hists examples
+    bootstrap: bool = False # if True, an existing histogram will be used to compute thresholds for a given histogram collection run (but we won't write to that one)
 
     # Data
     dataset: str = 'simple_train'

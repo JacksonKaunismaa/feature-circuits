@@ -12,6 +12,7 @@ import networkx as nx
 from graph_utils import dfs, iterate_edges
 from config import Config
 from attribution import threshold_effects
+from histogram_aggregator import HistAggregator
 
 def get_name(component, layer, idx, err_idx, add_layer=True):
     """Component is a high-level SAE location, like resid_0, or mlp_5.
@@ -89,16 +90,16 @@ def _get_label(name, annotations=None):
                     return f'{annotations[feat]} ({component})'
 
 
-def nodes_by_submod_add_entry(nodes, nodes_by_submod, node_name, cfg: Config):
+def nodes_by_submod_add_entry(nodes, nodes_by_submod, node_name, cfg: Config, hist_agg: HistAggregator):
     submod_nodes = nodes[node_name].to_tensor()
-    topk_ind = threshold_effects(submod_nodes, cfg, node_name, aggregated=True)
+    topk_ind = threshold_effects(submod_nodes, cfg, node_name, hist_agg)
 
     nodes_by_submod[node_name] = {
         tuple(idx) : submod_nodes[tuple(idx)].item() for idx in topk_ind
     }
 
 
-def plot_circuit(nodes, edges, annotations, cfg: Config, example_text: str | None = None, save_path: str = ''):
+def plot_circuit(nodes, edges, annotations, cfg: Config, hist_agg: HistAggregator, example_text: str | None = None, save_path: str = ''):
     if cfg.aggregation == 'none':
         plot_circuit_posaligned(nodes, edges, annotations, example_text, cfg, save_path)
         return
@@ -114,12 +115,12 @@ def plot_circuit(nodes, edges, annotations, cfg: Config, example_text: str | Non
 
     nodes_by_submod = {}
     if cfg.first_component == 'embed':
-        nodes_by_submod_add_entry(nodes, nodes_by_submod, 'embed', cfg)
+        nodes_by_submod_add_entry(nodes, nodes_by_submod, 'embed', cfg, hist_agg)
 
     for layer in range(cfg.layers):
         for component in ['attn', 'mlp', 'resid']:
             node_name = f'{component}_{layer}'
-            nodes_by_submod_add_entry(nodes, nodes_by_submod, node_name, cfg)
+            nodes_by_submod_add_entry(nodes, nodes_by_submod, node_name, cfg, hist_agg)
 
     pruned_G = build_pruned_graph(nodes, edges, nodes_by_submod, cfg)
     G = build_formatted_graph(nodes, edges, to_hex, get_label, cfg, nodes_by_submod, example_text, pruned_G)

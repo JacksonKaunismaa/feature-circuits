@@ -202,6 +202,10 @@ def get_circuit(
         features_by_submod[submod] = threshold_effects(effect, cfg, submod, hist_agg)
         print('\tn_feats', get_submod_repr(submod), len(features_by_submod[submod]))
 
+    if len(features_by_submod[resids[-1]]) == 0:
+        print("No features found for last layer. Skipping...")
+        return None, None
+
     # submodule -> list of indices
 
     n_layers = len(resids)
@@ -317,6 +321,8 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
     if not cfg.plot_only:
         nodes, edges = compute_circuit(model, embed, attns, mlps, resids, dictionaries,
                                        example_basename, examples, cfg, hist_agg, num_examples, batches)
+        if nodes is None and edges is None:
+            return
     else:
         with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'rb') as infile:
             save_dict = t.load(infile)
@@ -345,6 +351,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
                     edges,
                     annotations,
                     cfg,
+                    hist_agg,
                     example_text,
                     save_path=f'{args.plot_dir}/{example_basename}_{cfg.as_fname()}'
                     )
@@ -392,6 +399,9 @@ def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_bas
                 metric_fn,
                 metric_kwargs=dict(),
             )
+
+        if nodes is None and edges is None:
+            return None, None
 
         if running_nodes is None:
             running_nodes = {k : len(batch) * nodes[k].to('cpu') for k in nodes.keys() if k != 'y'}
@@ -457,8 +467,6 @@ if __name__ == '__main__':
                         help="Indirect effect threshold for keeping edges.")
     parser.add_argument('--edge_thresh_type', type=ThresholdType, default=ThresholdType.THRESH, choices=list(ThresholdType),
                         help="Threshold type for edge_threshold.")
-    parser.add_argument('--histogram_path', type=str, default='',
-                        help="Path to histograms for thresholding.")
     parser.add_argument('--pen_thickness', type=float, default=0.5,
                         help="Scales the width of the edges in the circuit plot.")
     parser.add_argument('--prune_method', type=str, default='none',
@@ -485,6 +493,14 @@ if __name__ == '__main__':
                             " than compute circuits. 0 to disable.")
     hist_options.add_argument('--accumulate_hists', default=False, action='store_true',
                     help="Accumulate histograms from existing files in the circuit directory.")
+    hist_options.add_argument('--histogram_path', type=str, default='',
+                              help="Path to histograms for thresholding.")
+    hist_options.add_argument('--bootstrap', default=False, action='store_true',
+                    help='If true, histogram_path will be used to load an existing histogram to set thresholds, and then a new histogram will be written to when collecting.')
+    hist_options.add_argument('--node_hist_path', type=str, default='',
+                              help="Histogram path for node thresholding. Needed when bootstrapping and node thresholds are in a different hist than edge thresholds. Overrides")
+    hist_options.add_argument('--edge_hist_path', type=str, default='',
+                                help="Path to edge histograms for thresholding.")
 
     parser.add_argument('--plot_circuit', default=False, action='store_true',
                         help="Plot the circuit after discovering it.")
@@ -600,18 +616,39 @@ if __name__ == '__main__':
     hist_agg = HistAggregator(cfg.model)
 
     needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
+    default_hist_path = f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
 
     if args.accumulate_hists or needs_hist:
-        hist_path = args.histogram_path if args.histogram_path else f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
-        ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
-        if ret_val is None and needs_hist:
-            raise ValueError("Threshold method requires histogram, but no existing histogram was found. Please run with --collect_hists first.")
+
+        if args.node_hist_path and args.edge_hist_path:
+            node_hist = HistAggregator(cfg.model)
+            edge_hist = HistAggregator(cfg.model)
+            node_retval = node_hist.load(args.node_hist_path)
+            edge_retval = edge_hist.load(args.edge_hist_path)
+            hist_agg.nodes = node_hist.nodes
+            hist_agg.edges = edge_hist.edges
+            if node_retval is None or edge_retval is None:
+                raise ValueError("Failed to load histograms.")
+            hist_path = default_hist_path
+        else:
+            hist_path = args.histogram_path if args.histogram_path else default_hist_path
+            ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
+
+            if ret_val is None and needs_hist:
+                raise ValueError("Threshold method requires histogram, but no existing histogram was found. Please run with --collect_hists first.")
 
     if cfg.node_thresh_type in NEEDS_HIST:
+        hist_agg = hist_agg.cpu()
         cfg.node_thresholds = hist_agg.compute_node_thresholds(cfg.node_threshold, cfg.node_thresh_type)
 
     if cfg.edge_thresh_type in NEEDS_HIST:
+        hist_agg = hist_agg.cpu()
         cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
+
+
+    if cfg.bootstrap:
+        hist_agg.reset()
+        hist_path = default_hist_path
 
     if cfg.seed is not None:
         random.seed(cfg.seed)

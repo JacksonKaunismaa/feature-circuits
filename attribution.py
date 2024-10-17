@@ -350,11 +350,24 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name: str | tuple[st
         return topk_ind, topk.values[topk.values > 0]
 
     if method in NEEDS_HIST:
-        ind = hist.threshold(effect)
+        if isinstance(effect, t.Tensor):
+            ind = hist.threshold(effect, effect.ndim)
+        else:
+            ind = hist.threshold(effect)
+
     elif method == ThresholdType.THRESH:
-        ind = t.nonzero(effect.flatten().abs() > threshold).flatten()
+        ind = t.nonzero(effect.abs().flatten() > threshold).flatten()
     else:
         raise ValueError(f"Unknown thresholding method {method}")
+
+
+    if isinstance(effect, t.Tensor):
+        max_values = 100
+        if ind.shape[0] > max_values:
+            values = effect.flatten()[ind]
+            topk = values.abs().topk(max_values)
+            ind = ind[topk.indices]
+
 
     if stack:
         return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()

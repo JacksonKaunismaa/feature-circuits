@@ -66,24 +66,13 @@ class Histogram:
     def __init__(self, submod: str, settings: HistogramSettings):
         self.submod = submod
         self.settings = settings
-        self.n_samples = 0
-
-        self.nnz = t.zeros(settings.n_bins).cuda()
-        self.acts = t.zeros(settings.n_bins).cuda()
-
-        self.error_nnz = t.zeros(settings.n_bins).cuda()
-        self.error_acts = t.zeros(settings.n_bins).cuda()
-
-        self.first_nnz = t.zeros(settings.n_bins).cuda()
-        self.first_acts = t.zeros(settings.n_bins).cuda()
-
-        self.error_first_nnz = t.zeros(2).cuda()  # 2 bins since it can only be 0 or 1
-        self.error_first_acts = t.zeros(settings.n_bins).cuda()
-
         self.thresholds = {}
 
         self.tracing_nnz = []
         self.tracing_acts = []
+
+        self.reset()
+
 
     @t.no_grad()
     def compute_hist(self, w: t.Tensor):
@@ -150,16 +139,32 @@ class Histogram:
         self.tracing_acts.clear()
 
     def cpu(self):
-        if isinstance(self.nnz, t.Tensor):
-            self.nnz = self.nnz.cpu().numpy()
-            self.acts = self.acts.cpu().numpy()
-            self.error_nnz = self.error_nnz.cpu().numpy()
-            self.error_acts = self.error_acts.cpu().numpy()
-            self.first_nnz = self.first_nnz.cpu().numpy()
-            self.first_acts = self.first_acts.cpu().numpy()
-            self.error_first_nnz = self.error_first_nnz.cpu().numpy()
-            self.error_first_acts = self.error_first_acts.cpu().numpy()
+        tensors = ['nnz', 'acts', 'error_nnz', 'error_acts', 'first_nnz', 'first_acts', 'error_first_nnz', 'error_first_acts']
+        for tens in tensors:
+            tensor = getattr(self, tens)
+            if isinstance(tensor, t.Tensor):
+                setattr(self, tens, getattr(self, tens).cpu().numpy())
+            setattr(self, tens, getattr(self, tens).astype(np.int64))
         return self
+
+    def reset(self):
+        # importantly, we don't reset thresholds
+        # the major use case of this reset function is for histogram bootstrapping, where we use one histogram to
+        # compute thresholds, and then we want to recompute histograms given these thresholds
+        self.n_samples = 0
+
+        self.nnz = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+        self.acts = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+
+        self.error_nnz = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+        self.error_acts = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+
+        self.first_nnz = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+        self.first_acts = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+
+        self.error_first_nnz = t.zeros(2, dtype=t.float32).cuda()  # 2 bins since it can only be 0 or 1
+        self.error_first_acts = t.zeros(self.settings.n_bins, dtype=t.float32).cuda()
+
 
     def select_hist_type(self, acts_or_nnz, hist_type: PlotType):
         match hist_type:
@@ -248,16 +253,23 @@ class Histogram:
         self.thresholds = {}
         bins = np.linspace(self.settings.act_min, self.settings.act_max, self.settings.n_bins)
         for hist_type in PlotType:
-            self.thresholds[hist_type] = 10**self.get_threshold(bins, 'acts', hist_type, thresh, thresh_type)
+            try:
+                self.thresholds[hist_type] = 10**bins[self.get_threshold(bins, 'acts', hist_type, thresh, thresh_type)]
+            except IndexError:
+                pass
         return self.thresholds
 
-    def threshold(self, w: t.Tensor):
+    def threshold(self, w: t.Tensor, ndim: int=3):
         abs_w = abs(w)
-        thresh_w = t.zeros_like(abs_w, dtype=t.bool, device=w.device)
-        thresh_w[:, 1:, :-1] = abs_w[:, 1:, :-1] > self.thresholds[PlotType.REGULAR]
-        thresh_w[:, :1, :-1] = abs_w[:, :1, :-1] > self.thresholds[PlotType.FIRST]
-        thresh_w[:, 1:, -1:] = abs_w[:, 1:, -1:] > self.thresholds[PlotType.ERROR]
-        thresh_w[:, :1, -1:] = abs_w[:, :1, -1:] > self.thresholds[PlotType.FIRST_ERROR]
+        thresh_w = t.zeros_like(abs_w, dtype=t.bool, device='cuda')
+        if ndim == 3:
+            thresh_w[:, 1:, :-1] = abs_w[:, 1:, :-1] > self.thresholds[PlotType.REGULAR]
+            thresh_w[:, :1, :-1] = abs_w[:, :1, :-1] > self.thresholds[PlotType.FIRST]
+            thresh_w[:, 1:, -1:] = abs_w[:, 1:, -1:] > self.thresholds[PlotType.ERROR]
+            thresh_w[:, :1, -1:] = abs_w[:, :1, -1:] > self.thresholds[PlotType.FIRST_ERROR]
+        else:
+            thresh_w[:-1] = abs_w[:-1] > self.thresholds[PlotType.REGULAR]
+            thresh_w[-1] = abs_w[-1] > self.thresholds[PlotType.ERROR]
 
         return t.nonzero(thresh_w.flatten()).flatten()
 
@@ -304,6 +316,14 @@ class HistAggregator:
         for up in self.edges:
             for e in self.edges[up].values():
                 e.cpu()
+        return self
+
+    def reset(self):
+        for n in self.nodes.values():
+            n.reset()
+        for up in self.edges:
+            for e in self.edges[up].values():
+                e.reset()
         return self
 
     def save(self, path):
