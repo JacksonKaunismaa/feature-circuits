@@ -362,12 +362,11 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name: str | tuple[st
 
 
     if isinstance(effect, t.Tensor):
-        max_values = 100
+        max_values = 60
         if ind.shape[0] > max_values:
             values = effect.flatten()[ind]
             topk = values.abs().topk(max_values)
             ind = ind[topk.indices]
-
 
     if stack:
         return t.stack(t.unravel_index(ind, effect.shape), dim=1).tolist()

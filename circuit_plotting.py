@@ -276,8 +276,9 @@ def build_formatted_graph(nodes, edges, to_hex, get_label, cfg: Config, nodes_by
                                 color = 'red' if weight < 0 else 'blue')
 
     # the cherry on top
+    formatted_text = example_text.replace('\\', '\\\\')
     if cfg.resid_posn == 'post':
-        add_node_prune_filter('y', G, pruned_G, shape='diamond', xlabel=example_text)
+        add_node_prune_filter('y', G, pruned_G, shape='diamond', xlabel=formatted_text)
         err_idx = nodes[f'resid_{cfg.layers-1}'].shape[0]
         jacobian = edges[f'resid_{cfg.layers-1}']['y']
         edge_scale = compute_edge_scale(jacobian)

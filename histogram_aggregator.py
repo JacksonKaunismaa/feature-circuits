@@ -260,8 +260,10 @@ class Histogram:
         return self.thresholds
 
     def threshold(self, w: t.Tensor, ndim: int=3):
-        abs_w = abs(w)
+        mult = 3 if self.submod == 'resid_11' else 1
+        abs_w = abs(w) * mult
         thresh_w = t.zeros_like(abs_w, dtype=t.bool, device='cuda')
+
         if ndim == 3:
             thresh_w[:, 1:, :-1] = abs_w[:, 1:, :-1] > self.thresholds[PlotType.REGULAR]
             thresh_w[:, :1, :-1] = abs_w[:, :1, :-1] > self.thresholds[PlotType.FIRST]
