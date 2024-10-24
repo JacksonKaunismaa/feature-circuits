@@ -13,6 +13,7 @@ class Config:
     edge_thresholds: dict[dict[str, str], float] = None  # mapping from submod name to threshold to be used (typically, we auto-generate this)
     node_thresh_type: ThresholdType = ThresholdType.THRESH
     edge_thresh_type: ThresholdType = ThresholdType.THRESH
+    max_nodes: int = 50  # limit feats/submod to at most this many, regardless of thresholding strategy (topk that pass threshold test)
     nodes_only: bool = False
     method: Literal['ig', 'attrib', 'exact'] = 'ig'
     aggregation: Literal['none', 'sum'] = 'sum'

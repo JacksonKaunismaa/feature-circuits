@@ -463,6 +463,8 @@ if __name__ == '__main__':
                         help="Indirect effect threshold for keeping circuit nodes.")
     parser.add_argument('--node_thresh_type', type=ThresholdType, default=ThresholdType.THRESH, choices=list(ThresholdType),
                         help="Threshold type for node_threshold.")
+    parser.add_argument('--max_nodes', type=int, default=50,
+                    help="Limit feats/submod to at most this many, regardless of thresholding strategy (topk that pass threshold test)")
     parser.add_argument('--edge_threshold', type=float, default=0.02,
                         help="Indirect effect threshold for keeping edges.")
     parser.add_argument('--edge_thresh_type', type=ThresholdType, default=ThresholdType.THRESH, choices=list(ThresholdType),

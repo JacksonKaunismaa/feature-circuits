@@ -343,6 +343,8 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name: str | tuple[st
     if method == ThresholdType.SPARSITY:
         # if k_sparsity is None:
         k_sparsity = int(threshold * cfg.example_length)  # dont scale by n_features to ensure that we the same number of features per SAE
+        if cfg.max_nodes is not None:
+            k_sparsity = min(k_sparsity, cfg.max_nodes)
         topk = effect.abs().flatten().topk(k_sparsity)
         topk_ind = topk.indices[topk.values > 0]
         if stack:
@@ -362,10 +364,9 @@ def threshold_effects(effect: t.Tensor, cfg: Config, effect_name: str | tuple[st
 
 
     if isinstance(effect, t.Tensor):
-        max_values = 60
-        if ind.shape[0] > max_values:
+        if ind.shape[0] > cfg.max_nodes:
             values = effect.flatten()[ind]
-            topk = values.abs().topk(max_values)
+            topk = values.abs().topk(cfg.max_nodes)
             ind = ind[topk.indices]
 
     if stack:
@@ -468,6 +469,7 @@ def jvp(
                                                  (upstream_submod, downstream_submod),
                                                  hist_agg,
                                                  stack=False)
+
 
             vjv_indices[downstream_feat] = vjv_ind.save()
             vjv_values[downstream_feat] = vjv_val.save()

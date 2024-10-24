@@ -111,34 +111,28 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
 
 
 
-def load_examples_hf(dataset, num_examples, model, data_dir='data', length=None):
+def load_examples_hf(dataset, num_examples, model, length=None):
+    ds = load_dataset(dataset)
+    text = ds["train"]["text"]
     examples = []
-    dset_dir = os.path.join(data_dir, dataset.replace("/", "_"))
-
-    if not os.path.exists(dset_dir):
-        print("Directory does not exist, writing json files for single examples...")
-        os.makedirs(dset_dir, exist_ok=True)
-        ds = load_dataset(dataset)
-        text = ds["train"]["text"]
-        for i, sent in tqdm(enumerate(text)):
-            tokenized = model.tokenizer(sent, max_length=length+1, truncation=True, return_length=True)#['input_ids']
-            if tokenized['length'][0] < length+1:
-                continue
-            retokenized = [model.tokenizer.decode(t) for t in tokenized['input_ids']]
-            json_data = {"0": {'document_idx': i, 'answer_token_in_doc_idx': -1, 'answer_token_global_idx': -1}}
-            json_data["0"]['context'] = retokenized[:-1]
-            json_data["0"]['answer'] = retokenized[-1]
-            fname = os.path.join(dset_dir, f"{i}.json")
-            with open(fname, 'w') as f:
-                json.dump(json_data, f)
-
-    for i, fname in enumerate(os.listdir(dset_dir)):
-        examples.append(load_examples_nopair(os.path.join(dset_dir, fname), 1, model, length=length))
-        if len(examples) == num_examples:
+    for i, sent in tqdm(enumerate(text)):
+        tokenized = model.tokenizer(sent, return_length=True,
+                                    padding=False, return_tensors='pt')#['input_ids']
+        context = tokenized['input_ids']
+        if length is not None and tokenized['length'][0] < length+1:
+            continue
+        if length is not None and tokenized['length'][0] > length+1:
+            context = context[:, -(length+1):]
+        context, answer = context[:, :-1], context[:, -1]
+        example_dict = {"clean_prefix": context,
+                        "clean_answer": answer,
+                        "prefix_length_wo_pad": context.shape[-1],
+                        'document_idx': i}
+        # nede to wrap it in a list, as circuit code expects a list
+        examples.append([example_dict])
+        if len(examples) >= num_examples:
             break
-
     return examples
-
 
 
 def get_annotation(dataset, model, data):
