@@ -167,6 +167,5 @@ nohup.out
 **/*.pkl
 **/*.pt
 data/*
-.vscode
 dictionaries
 

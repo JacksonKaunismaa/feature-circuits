@@ -68,6 +68,7 @@ def sparse_mean(x, dim):
 
 
 def sparse_select_last(x, dim):
+    # select the last element of the sequence for sparse tensor
     if isinstance(dim, tuple):
         seq_len = x.shape[dim[0]]
         good_mask = x.indices()[dim[0]] == seq_len - 1

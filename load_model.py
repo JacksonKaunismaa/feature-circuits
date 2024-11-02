@@ -64,21 +64,21 @@ def load_model_dicts(args, cfg):
             d_model=512
         ))
         dictionaries[embed] = AutoEncoder.from_pretrained(
-            f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
+            f'{args.dict_path}/embed/{args.dict_id}_32768/ae.pt',
             device=device
         )
 
         for i in range(len(model.gpt_neox.layers)):
             dictionaries[resids[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_32768/ae.pt',
                 device=device
             )
             dictionaries[mlps[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_32768/ae.pt',
                 device=device
             )
             dictionaries[attns[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
+                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_32768/ae.pt',
                 device=device
             )
 
@@ -90,9 +90,9 @@ def load_hists(args, cfg, save_basename):
 
     needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
     default_hist_path = f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
+    hist_path = args.histogram_path if args.histogram_path else default_hist_path
 
     if args.accumulate_hists or needs_hist or args.bootstrap_path:
-        hist_path = args.histogram_path if args.histogram_path else default_hist_path
         ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
 
         if ret_val is None and needs_hist:

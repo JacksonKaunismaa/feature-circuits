@@ -197,5 +197,5 @@ def get_examples(args, model):
         examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
     elif args.data_type == 'prompt':
         save_basename = 'prompt'
-        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
-    return save_basename,examples
+        examples = load_examples_prompt(args.prompt, model)
+    return save_basename, examples

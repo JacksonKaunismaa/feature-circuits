@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
 from attribution import patching_effect, jvp, threshold_effects
-from circuit_plotting import plot_circuit, plot_circuit_posaligned
+from circuit_plotting import plot_circuit
 from load_model import load_hists, load_model_dicts
 from loading_utils import get_examples
 from config import Config
@@ -257,8 +257,8 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
 
 
     example_text = None
-    if cfg.data_type == 'hf':
-        example_text = ''.join(model.tokenizer.decode(examples[0]['clean_prefix'][0])) + ' -> ' + model.tokenizer.decode([examples[0]['clean_answer']])
+    if cfg.data_type in ['hf', 'prompt']:
+        example_text = ''.join(model.tokenizer.decode(examples[0]['clean_prefix'][0])) + ' -> ' + model.tokenizer.decode(examples[0]['clean_answer'])
     elif cfg.aggregation == "none":
         example_text = model.tokenizer.batch_decode(examples[0]["clean_prefix"])[0]
 
@@ -284,7 +284,7 @@ def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_bas
         else:
             model_out = model.embed_out
 
-        if cfg.data_type in ['nopair', 'hf']:
+        if cfg.data_type in ['nopair', 'hf', 'prompt']:
             patch_inputs = None
             def metric_fn(model):
                 return (

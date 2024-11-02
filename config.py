@@ -22,6 +22,7 @@ class Config:
     bootstrap: bool = False # if True, an existing histogram will be used to compute thresholds for a given histogram collection run (but we won't write to that one)
     circuit_dir: str = ''  # base path to circuit files
     plot_dir: str = ''  # base path to plots
+    bootstrap_path: str = ''  # path to the histogram to use for bootstrapping
 
     # Data
     dataset: str = 'simple_train'
