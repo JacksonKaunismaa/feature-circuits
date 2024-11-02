@@ -111,7 +111,7 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
 
 
 
-def load_examples_hf(dataset, num_examples, model, length=None):
+def load_examples_hf(dataset, num_examples, model, length=None) -> list[dict]:
     ds = load_dataset(dataset)
     text = ds["train"]["text"]
     examples = []
@@ -133,6 +133,17 @@ def load_examples_hf(dataset, num_examples, model, length=None):
         if len(examples) >= num_examples:
             break
     return examples
+
+def load_examples_prompt(prompt: str, model) -> list[dict]:
+    tokenized = model.tokenizer(prompt, return_length=True,
+                                padding=False, return_tensors='pt')
+    context = tokenized['input_ids']
+    context, answer = context[:, :-1], context[:, -1]
+    example_dict = {"clean_prefix": context,
+                    "clean_answer": answer,
+                    "prefix_length_wo_pad": context.shape[-1],
+                    'document_idx': -1}
+    return [example_dict]
 
 
 def get_annotation(dataset, model, data):
@@ -168,3 +179,23 @@ def get_annotation(dataset, model, data):
         annotations[template_word] = span
 
     return annotations
+
+
+def get_examples(args, model):
+    if args.data_type == 'nopair':
+        save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
+        examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'regular':
+        data_path = f"data/{args.dataset}.json"
+        save_basename = args.dataset
+        if args.aggregation == "sum":
+            examples = load_examples(data_path, args.num_examples, model, pad_to_length=args.example_length)
+        else:
+            examples = load_examples(data_path, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'hf':
+        save_basename = args.dataset.replace('/', '_')
+        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'prompt':
+        save_basename = 'prompt'
+        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
+    return save_basename,examples

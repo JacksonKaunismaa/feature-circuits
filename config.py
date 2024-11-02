@@ -20,6 +20,8 @@ class Config:
     prune_method: Literal['none', 'source-sink', 'sink-backwards', 'first-layer-sink'] = 'none'
     collect_hists: int = 0  # if > 0 then collect histograms for the first collect_hists examples
     bootstrap: bool = False # if True, an existing histogram will be used to compute thresholds for a given histogram collection run (but we won't write to that one)
+    circuit_dir: str = ''  # base path to circuit files
+    plot_dir: str = ''  # base path to plots
 
     # Data
     dataset: str = 'simple_train'

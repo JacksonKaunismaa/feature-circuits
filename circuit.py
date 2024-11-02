@@ -9,100 +9,16 @@ import random
 import numpy as np
 import torch as t
 from tqdm import tqdm
-from nnsight import LanguageModel
 
-from dictionary_learning import AutoEncoder
-from dictionary_learning.dictionary import IdentityDict
 
-from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr, NEEDS_HIST
-from activation_utils import SparseAct
+from histogram_aggregator import HistAggregator, ThresholdType, get_submod_repr
 from attribution import patching_effect, jvp, threshold_effects
 from circuit_plotting import plot_circuit, plot_circuit_posaligned
-from loading_utils import load_examples, load_examples_nopair, load_examples_hf
+from load_model import load_hists, load_model_dicts
+from loading_utils import get_examples
 from config import Config
+from tensor_ops import sparse_select_last
 
-
-###### utilities for dealing with sparse COO tensors ######
-def flatten_index(idxs, shape):
-    """
-    index : a tensor of shape [n, len(shape)]
-    shape : a shape
-    return a tensor of shape [n] where each element is the flattened index
-    """
-    idxs = idxs.t()
-    # get strides from shape
-    strides = [1]
-    for i in range(len(shape)-1, 0, -1):
-        strides.append(strides[-1]*shape[i])
-    strides = list(reversed(strides))
-    strides = t.tensor(strides).to(idxs.device)
-    # flatten index
-    return (idxs * strides).sum(dim=1).unsqueeze(0)
-
-def prod(l):
-    out = 1
-    for x in l: out *= x
-    return out
-
-def sparse_flatten(x):
-    return t.sparse_coo_tensor(
-        flatten_index(x.indices(), x.shape),
-        x.values(),
-        (prod(x.shape),),
-        is_coalesced=True
-    )
-
-def reshape_index(index, shape):
-    """
-    index : a tensor of shape [n]
-    shape : a shape
-    return a tensor of shape [n, len(shape)] where each element is the reshaped index
-    """
-    multi_index = []
-    for dim in reversed(shape):
-        multi_index.append(index % dim)
-        index //= dim
-    multi_index.reverse()
-    return t.stack(multi_index, dim=-1)
-
-def sparse_reshape(x, shape):
-    """
-    x : a sparse COO tensor
-    shape : a shape
-    return x reshaped to shape
-    """
-    # first flatten x
-    x = sparse_flatten(x)
-    new_indices = reshape_index(x.indices()[0], shape)
-    return t.sparse_coo_tensor(new_indices.t(), x.values(), shape, is_coalesced=True)
-
-def sparse_mean(x, dim):
-    if isinstance(dim, int):
-        return x.sum(dim=dim) / x.shape[dim]
-    else:
-        return x.sum(dim=dim) / prod(x.shape[d] for d in dim)
-
-
-def sparse_select_last(x, dim):
-    if isinstance(dim, tuple):
-        seq_len = x.shape[dim[0]]
-        good_mask = x.indices()[dim[0]] == seq_len - 1
-        new_shape = [s for i, s in enumerate(x.shape) if i not in dim]
-        new_dims = [i for i in range(len(x.shape)) if i not in dim]
-        for d in dim[1:]:
-            good_mask &= x.indices()[d] == x.shape[d] - 1
-    else:
-        seq_len = x.shape[dim]
-        good_mask = x.indices()[dim] == seq_len - 1
-        new_shape = [s for i, s in enumerate(x.shape) if i != dim]
-        new_dims = [i for i in range(len(x.shape)) if i != dim]
-
-    values = x.values()[good_mask]
-    indices = x.indices()[new_dims][:, good_mask]
-    return t.sparse_coo_tensor(indices, values, new_shape, is_coalesced=True)
-
-
-######## end sparse tensor utilities ########
 
 def aggregate_single_node_edge(is_node, weight_matrix, dims, divisor, last_agg):
     if last_agg:
@@ -324,7 +240,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
         if nodes is None and edges is None:
             return
     else:
-        with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'rb') as infile:
+        with open(f'{cfg.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'rb') as infile:
             save_dict = t.load(infile)
         nodes = save_dict['nodes']
         edges = save_dict['edges']
@@ -332,7 +248,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
     # feature annotations
     try:
         annotations = {}
-        with open(f"annotations/{args.dict_id}_{args.dict_size}.jsonl", 'r') as annotations_data:
+        with open(f"annotations/{cfg.dict_id}.jsonl", 'r') as annotations_data:
             for annotation_line in annotations_data:
                 annotation = json.loads(annotation_line)
                 annotations[annotation["Name"]] = annotation["Annotation"]
@@ -353,7 +269,7 @@ def process_examples(model, embed, attns, mlps, resids, dictionaries, example_ba
                     cfg,
                     hist_agg,
                     example_text,
-                    save_path=f'{args.plot_dir}/{example_basename}_{cfg.as_fname()}'
+                    save_path=f'{cfg.plot_dir}/{example_basename}_{cfg.as_fname()}'
                     )
 
 def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_basename, examples, cfg: Config, hist_agg, num_examples, batches):
@@ -403,18 +319,9 @@ def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_bas
         if nodes is None and edges is None:
             return None, None
 
-        if running_nodes is None:
-            running_nodes = {k : len(batch) * nodes[k].to('cpu') for k in nodes.keys() if k != 'y'}
-            if not cfg.nodes_only:
-                running_edges = { k : { kk : len(batch) * edges[k][kk].to('cpu') for kk in edges[k].keys() } for k in edges.keys()}
-        else:
-            for k in nodes.keys():
-                if k != 'y':
-                    running_nodes[k] += len(batch) * nodes[k].to('cpu')
-            if not cfg.nodes_only:
-                for k in edges.keys():
-                    for v in edges[k].keys():
-                        running_edges[k][v] += len(batch) * edges[k][v].to('cpu')
+        running_nodes = {k : len(batch) * nodes[k].to('cpu') for k in nodes.keys() if k != 'y'}
+        if not cfg.nodes_only:
+            running_edges = { k : { kk : len(batch) * edges[k][kk].to('cpu') for kk in edges[k].keys() } for k in edges.keys()}
 
             # memory cleanup
         del nodes, edges
@@ -431,13 +338,12 @@ def compute_circuit(model, embed, attns, mlps, resids, dictionaries, example_bas
             "edges": edges
         }
     if cfg.collect_hists == 0:
-        with open(f'{args.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'wb') as outfile:
+        with open(f'{cfg.circuit_dir}/{example_basename}_{cfg.as_fname()}.pt', 'wb') as outfile:
             t.save(save_dict, outfile)
 
     return nodes, edges
 
-
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', '-d', type=str, default='simple_train',
                         help="A subject-verb agreement dataset in data/, or a path to a cluster .json.")
@@ -453,8 +359,6 @@ if __name__ == '__main__':
                         help="Hidden size of the language model.")
     parser.add_argument('--dict_id', type=str, default=10,
                         help="ID of the dictionaries. Use `id` to obtain circuits on neurons/heads directly.")
-    parser.add_argument('--dict_size', type=int, default=32768,
-                        help="The width of the dictionary encoder.")
     parser.add_argument('--batch_size', type=int, default=32,
                         help="Number of examples to process at once when running circuit discovery.")
     parser.add_argument('--aggregation', type=str, default='sum', choices=['sum', 'last', 'none'],
@@ -484,10 +388,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--data_type',
         type=str,
-        choices=['nopair', 'regular', 'hf'],
+        choices=['nopair', 'regular', 'hf', 'prompt'],
         default='regular',
         help="Specify the type of the dataset."
     )
+    parser.add_argument('--prompt', type=str, default='None',
+            help="Input a custom prompt to generate a circuit on. Only used when data_type is 'prompt'.")
 
     hist_options = parser.add_argument_group('Histogram collection options')
     hist_options.add_argument('--collect_hists', default=0, type=int,
@@ -497,12 +403,8 @@ if __name__ == '__main__':
                     help="Accumulate histograms from existing files in the circuit directory.")
     hist_options.add_argument('--histogram_path', type=str, default='',
                               help="Path to histograms for thresholding.")
-    hist_options.add_argument('--bootstrap', default=False, action='store_true',
-                    help='If true, histogram_path will be used to load an existing histogram to set thresholds, and then a new histogram will be written to when collecting.')
-    hist_options.add_argument('--node_hist_path', type=str, default='',
-                              help="Histogram path for node thresholding. Needed when bootstrapping and node thresholds are in a different hist than edge thresholds. Overrides")
-    hist_options.add_argument('--edge_hist_path', type=str, default='',
-                                help="Path to edge histograms for thresholding.")
+    hist_options.add_argument('--bootstrap_path', default=None, type=str,
+                    help='If set, histogram_path will be used to load an existing histogram to set thresholds, and then a new one will be written to at bootstrap_path.')
 
     parser.add_argument('--plot_circuit', default=False, action='store_true',
                         help="Plot the circuit after discovering it.")
@@ -521,136 +423,14 @@ if __name__ == '__main__':
     cfg = Config()
     cfg.update(args)
 
-    device = cfg.device
+    model, embed, attns, mlps, resids, dictionaries = load_model_dicts(args, cfg)
 
-    model = LanguageModel(cfg.model, device_map=device, dispatch=True)
-
-    if cfg.model != 'gpt2':
-        embed = model.gpt_neox.embed_in
-        attns = [layer.attention for layer in model.gpt_neox.layers]
-        mlps = [layer.mlp for layer in model.gpt_neox.layers]
-        resids = [layer for layer in model.gpt_neox.layers]
-    else:
-        embed = None   # embedding SAE doesn't exist for gpt2
-        attns = [layer.attn for layer in model.transformer.h]
-        mlps = [layer.mlp for layer in model.transformer.h]
-        resids = [layer for layer in model.transformer.h]
-
-    dictionaries = {}
-    hists = {}
-
-    if cfg.dict_id == 'id':
-        dictionaries[embed] = IdentityDict(cfg.d_model)
-        for i in range(len(model.gpt_neox.layers)):
-            dictionaries[resids[i]] = IdentityDict(cfg.d_model)
-            dictionaries[mlps[i]] = IdentityDict(cfg.d_model)
-            dictionaries[attns[i]] = IdentityDict(cfg.d_model)
-
-    elif cfg.dict_id == 'gpt2':
-        cfg.update_from_dict(dict(
-            resid_posn='post',
-            parallel_attn=False,
-            first_component='attn_0',
-            layers=12,
-            d_model=768
-        ))
-
-        for i in range(len(model.transformer.h)):
-            dictionaries[resids[i]] = AutoEncoder.from_hf(
-                "jbloom/GPT2-Small-OAI-v5-32k-resid-post-SAEs",
-                f"v5_32k_layer_{i}.pt/sae_weights.safetensors",
-                device=device
-            )
-            dictionaries[mlps[i]] = AutoEncoder.from_hf(
-                "jbloom/GPT2-Small-OAI-v5-128k-mlp-out-SAEs",
-                f"v5_128k_layer_{i}/sae_weights.safetensors",
-                device=device
-            )
-            dictionaries[attns[i]] = AutoEncoder.from_hf(
-                "jbloom/GPT2-Small-OAI-v5-128k-attn-out-SAEs",
-                f"v5_128k_layer_{i}/sae_weights.safetensors",
-                device=device
-            )
-    else:
-        cfg.update_from_dict(dict(
-            resid_posn='post',
-            parallel_attn=True,
-            first_component='embed',
-            layers=6,
-            d_model=512
-        ))
-        dictionaries[embed] = AutoEncoder.from_pretrained(
-            f'{args.dict_path}/embed/{args.dict_id}_{args.dict_size}/ae.pt',
-            device=device
-        )
-
-        for i in range(len(model.gpt_neox.layers)):
-            dictionaries[resids[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/resid_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-            dictionaries[mlps[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/mlp_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-            dictionaries[attns[i]] = AutoEncoder.from_pretrained(
-                f'{args.dict_path}/attn_out_layer{i}/{args.dict_id}_{args.dict_size}/ae.pt',
-                device=device
-            )
-
-    if args.data_type == 'nopair':
-        save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
-        examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
-    elif args.data_type == 'regular':
-        data_path = f"data/{args.dataset}.json"
-        save_basename = args.dataset
-        if args.aggregation == "sum":
-            examples = load_examples(data_path, args.num_examples, model, pad_to_length=args.example_length)
-        else:
-            examples = load_examples(data_path, args.num_examples, model, length=args.example_length)
-    elif args.data_type == 'hf':
-        save_basename = args.dataset.replace('/', '_')
-        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
+    save_basename, examples = get_examples(args, model)
 
     if not os.path.exists(args.circuit_dir):
         os.makedirs(args.circuit_dir)
 
-    hist_agg = HistAggregator(cfg.model)
-
-    needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
-    default_hist_path = f'{args.circuit_dir}/{save_basename}_{cfg.as_fname()}.hist.pt'
-
-    if args.accumulate_hists or needs_hist:
-
-        if args.node_hist_path and args.edge_hist_path:
-            node_hist = HistAggregator(cfg.model)
-            edge_hist = HistAggregator(cfg.model)
-            node_retval = node_hist.load(args.node_hist_path)
-            edge_retval = edge_hist.load(args.edge_hist_path)
-            hist_agg.nodes = node_hist.nodes
-            hist_agg.edges = edge_hist.edges
-            if node_retval is None or edge_retval is None:
-                raise ValueError("Failed to load histograms.")
-            hist_path = default_hist_path
-        else:
-            hist_path = args.histogram_path if args.histogram_path else default_hist_path
-            ret_val = hist_agg.load(hist_path)  # should return hist_agg if successful
-
-            if ret_val is None and needs_hist:
-                raise ValueError("Threshold method requires histogram, but no existing histogram was found. Please run with --collect_hists first.")
-
-    if cfg.node_thresh_type in NEEDS_HIST:
-        hist_agg = hist_agg.cpu()
-        cfg.node_thresholds = hist_agg.compute_node_thresholds(cfg.node_threshold, cfg.node_thresh_type)
-
-    if cfg.edge_thresh_type in NEEDS_HIST:
-        hist_agg = hist_agg.cpu()
-        cfg.edge_thresholds = hist_agg.compute_edge_thresholds(cfg.edge_threshold, cfg.edge_thresh_type)
-
-
-    if cfg.bootstrap:
-        hist_agg.reset()
-        hist_path = default_hist_path
+    hist_agg, hist_path = load_hists(args, cfg, save_basename)
 
     if cfg.seed is not None:
         random.seed(cfg.seed)
@@ -669,3 +449,7 @@ if __name__ == '__main__':
                     break
     else:
         process_examples(model, embed, attns, mlps, resids, dictionaries, save_basename, examples, cfg, hist_agg)
+
+
+if __name__ == '__main__':
+    main()

@@ -9,7 +9,7 @@ import torch as t
 import numpy as np
 import networkx as nx
 
-from graph_utils import dfs, iterate_edges
+from graph_utils import iterate_edges
 from config import Config
 from attribution import threshold_effects
 from histogram_aggregator import HistAggregator

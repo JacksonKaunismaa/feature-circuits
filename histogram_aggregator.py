@@ -321,6 +321,8 @@ class HistAggregator:
         return self
 
     def reset(self):
+        """Reset histograms to zero. Importantly, thresholds are not reset,
+        so that boostrapping works."""
         for n in self.nodes.values():
             n.reset()
         for up in self.edges:
