@@ -1,15 +1,24 @@
-from collections import defaultdict
+from enum import Enum
+import json
+from typing import TYPE_CHECKING
 import dataclasses
 import os
+import os.path as osp
+import glob
 from typing import Literal
 import warnings
 import numpy as np
 import torch as t
 import matplotlib.pyplot as plt
-from enum import Enum
+from safetensors import safe_open
+from safetensors.torch import save_file as torch_save_file
+from safetensors.numpy import save_file as numpy_save_file
 
-from dictionary_learning.dictionary import AutoEncoder
-from graph_utils import dfs, iterate_edges
+from graph_utils import iterate_edges
+if TYPE_CHECKING:
+    from config import Config
+
+
 
 def normalize_path(path):
     parts = path.split('.')
@@ -59,10 +68,14 @@ class HistogramSettings:
     act_min: float = -10
     act_max: float = 5
     nnz_min: float = 0
-    nnz_max: dict[str, float] = dataclasses.field(default_factory=dict)
     n_feats: dict[str, int] = dataclasses.field(default_factory=dict)
 
 class Histogram:
+    hist_names = ['nnz', 'acts',
+                  'error_nnz', 'error_acts',
+                  'first_nnz', 'first_acts',
+                  'error_first_nnz', 'error_first_acts']
+
     def __init__(self, submod: str, settings: HistogramSettings):
         self.submod = submod
         self.settings = settings
@@ -73,6 +86,17 @@ class Histogram:
 
         self.reset()
 
+    def state_dict(self):
+        tensor_state = {k: getattr(self, k) for k in self.hist_names}
+        pyth_state = {'n_samples': self.n_samples, 'submod': self.submod}
+        return tensor_state, pyth_state
+
+    def load_state_dict(self, pyth_state, tensor_state):
+        for k, v in tensor_state.items():
+            setattr(self, k, v)
+        self.n_samples = pyth_state['n_samples']
+        self.submod = pyth_state['submod']
+        return self
 
     @t.no_grad()
     def compute_hist(self, w: t.Tensor):
@@ -83,7 +107,7 @@ class Histogram:
         # this will implicitly ignore cases where there are no non-zero elements
         # since 0s -> -inf through the log10, which is less than the min
         nnz_hist = t.histc(t.log10(nnz), bins=self.settings.n_bins, min=self.settings.nnz_min,
-                           max=self.settings.nnz_max[self.submod])
+                           max=np.log10(self.settings.n_feats[self.submod]-1)) # -1 to avoid "error" term
         return nnz_hist, acts_hist
 
 
@@ -178,9 +202,9 @@ class Histogram:
                 hist = self.error_first_acts if acts_or_nnz == 'acts' else self.error_first_nnz
         return hist
 
-    def get_hist_settings(self, acts_or_nnz='acts', plot_type=PlotType.REGULAR, thresh=None, thresh_type=None):
+    def get_hist_settings(self, acts_or_nnz='acts', hist_type=PlotType.REGULAR, thresh=None, thresh_type=None):
 
-        hist = self.select_hist_type(acts_or_nnz, plot_type)
+        hist = self.select_hist_type(acts_or_nnz, hist_type)
 
         if acts_or_nnz == 'acts':
             min_val = self.settings.act_min
@@ -200,10 +224,10 @@ class Histogram:
         if thresh is not None:
             if acts_or_nnz == 'nnz':
                 raise ValueError("Cannot compute threshold for nnz")
-            else:
-                thresh_loc = self.get_threshold(hist, bins, thresh, thresh_type)
-                hist = hist.copy()
-                hist[:thresh_loc-1] = 0
+
+            thresh_loc = self.get_threshold(bins, acts_or_nnz, hist_type, thresh, thresh_type)
+            hist = hist.copy()
+            hist[:thresh_loc-1] = 0
 
         _, median_val, std = self.get_mean_median_std(hist, bins)
         return hist, bins, xlabel, median_val, std
@@ -217,7 +241,8 @@ class Histogram:
         std = np.sqrt(((bins - mean)**2 * hist).sum() / total)
         return mean, median_val, std
 
-    def get_threshold(self, bins, acts_or_nnz, hist_type, thresh, thresh_type):
+    def get_threshold(self, bins: t.Tensor, acts_or_nnz: Literal['acts', 'nnz'],
+                      hist_type: PlotType, thresh: float, thresh_type: ThresholdType):
         if acts_or_nnz == 'nnz':
             raise ValueError("Cannot compute threshold for nnz")
 
@@ -280,7 +305,6 @@ class HistAggregator:
     def __init__(self, model_str='gpt2', n_bins=10_000, act_min=-10, act_max=5):
         self.settings = HistogramSettings(n_bins=n_bins, act_min=act_min, act_max=act_max)
         self.model_str = model_str
-        self.n_samples = defaultdict(int)
 
         self.nodes: dict[str, Histogram] = {}
         self.edges: dict[dict[str, Histogram]] = {}
@@ -294,7 +318,6 @@ class HistAggregator:
             pass
         if submod not in self.nodes:
             self.settings.n_feats[submod] = w.shape[2]
-            self.settings.nnz_max[submod] = np.log10(self.settings.n_feats[submod]-1) # -1 to avoid "error" term
             self.nodes[submod] = Histogram(submod, self.settings)
 
         self.nodes[submod].compute_hists(w)
@@ -315,7 +338,7 @@ class HistAggregator:
     def cpu(self):
         for n in self.nodes.values():
             n.cpu()
-        for up in self.edges:
+        for up in self.edges:  # pylint: disable=consider-using-dict-items
             for e in self.edges[up].values():
                 e.cpu()
         return self
@@ -325,18 +348,51 @@ class HistAggregator:
         so that boostrapping works."""
         for n in self.nodes.values():
             n.reset()
-        for up in self.edges:
+        for up in self.edges:  # pylint: disable=consider-using-dict-items
             for e in self.edges[up].values():
                 e.reset()
         return self
 
-    def save(self, path):
-        t.save({'nodes': self.nodes,
-                'edges': self.edges,
-                'n_samples': self.n_samples,
-                'settings': self.settings,
-                'model_str': self.model_str,
-                }, path)
+    def save(self, path: str, cfg: 'Config'):
+        """
+        Save histogram to disk. Path corresponds to a directory, where we will
+        store 2 files, the tensor state in a safetensor and the state of config
+        objects in a json file.
+        """
+        pyth_state = {
+            'settings': dataclasses.asdict(self.settings),
+            'model_str': self.model_str,
+            'cfg': cfg.asdict()  # save config purely for debugging purposes
+        }
+
+        # save tensor state with safetensors, and save pyth state as a json to path.cfg
+        os.makedirs(path, exist_ok=True)
+
+        if isinstance(next(iter(self.nodes.values())).nnz, t.Tensor):
+            save_file = torch_save_file
+        else:
+            save_file = numpy_save_file
+
+        for node, hist in self.nodes.items():
+            pyth_state[node] = {}
+            tensor_state, pyth_state[node]['node'] = hist.state_dict()
+            os.makedirs(osp.join(path, node), exist_ok=True)
+            save_file(tensor_state, osp.join(path, node, 'node.safetensors'))
+
+        for up in self.edges:  # pylint: disable=consider-using-dict-items
+            for down, hist in self.edges[up].items():
+                tensor_state, pyth_state[up][down] = hist.state_dict()
+                save_file(tensor_state, osp.join(path, up, f'{down}.safetensors'))
+
+        with open(osp.join(path, 'config.json'), 'w') as f:
+            json.dump(pyth_state, f, indent=4)
+
+    def load_into_hist(self, path, map_location, submod, pyth_state):
+        tensor_state = {}
+        with safe_open(path, 'pt', device=map_location) as f:
+            for k in f.keys():
+                tensor_state[k] = f.get_tensor(k)
+        return Histogram(submod, self.settings).load_state_dict(pyth_state, tensor_state)
 
     def load(self, path_or_dict, map_location=None):
         if isinstance(path_or_dict, str):
@@ -354,6 +410,33 @@ class HistAggregator:
         self.n_samples = data['n_samples']
         if isinstance(path_or_dict, str):
             print("Successfully loaded histograms at", path_or_dict)
+        return self
+
+    def new_load(self, path, map_location=None):
+        if not osp.exists(path):
+            warnings.warn(f'Tried to load histograms, but path "{path}" was not found...')
+            return None
+
+        with open(osp.join(path, 'config.json'), 'r') as f:
+            pyth_state = json.load(f)
+
+        self.settings = HistogramSettings(**pyth_state['settings'])
+        self.model_str = pyth_state['model_str']
+
+        for node in glob.glob(osp.join(path, '*')):
+            if osp.isdir(node):
+                submod = osp.basename(node)
+                # load node histograms
+                self.nodes[submod] = self.load_into_hist(osp.join(node, 'node.safetensors'),
+                                                         map_location, submod, pyth_state[submod]['node'])
+                self.edges[submod] = {}
+
+                # load edge histograms
+                for edge in glob.glob(osp.join(node, '*.safetensors')):
+                    down = osp.splitext(osp.basename(edge))[0]
+                    self.edges[submod][down] = self.load_into_hist(edge, map_location, submod, pyth_state[submod][down])
+
+        print("Successfully loaded histograms at", path)
         return self
 
     def get_hist_for_node_effect(self, layer, component, acts_or_nnz, plot_type: PlotType, thresh=None, thresh_type=None):

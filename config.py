@@ -1,6 +1,7 @@
 import dataclasses
 from typing import Literal
 from argparse import Namespace
+from enum import Enum
 
 from histogram_aggregator import ThresholdType
 
@@ -61,6 +62,13 @@ class Config:
             if hasattr(self, k):
                 setattr(self, k, v)
 
+    def asdict(self):
+        # used for debugging purposes only, don't use this for serialization or loading
+        d = dataclasses.asdict(self)
+        for k, v in d.items():
+            if isinstance(v, Enum):
+                d[k] = v.value
+        return d
 
     def as_fname(self):
         return f'dict{self.dict_id}_node{self.node_threshold}-{self.node_thresh_type.value}_edge{self.edge_threshold}-{self.edge_thresh_type.value}_agg{self.aggregation}_method{self.method}_prune{self.prune_method}_model{self.model.replace("/", "_")}'

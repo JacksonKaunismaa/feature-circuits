@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/circuit.py",
             "console": "integratedTerminal",
-            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 2 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.1 --node_thresh_type thresh --edge_threshold 0.01 --edge_thresh_type thresh --aggregation last --example_length 64 --dict_id 10 --data_type hf  --prune first-layer-sink --histogram_path ./circuits/NeelNanda_pile-10k_dict10_node0.1_edge0.01_n9990_aggnone_threshTrue_methodig_prunefirst-layer-sink_modelEleutherAI_pythia-70m-deduped.hist.pt"
+            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 2 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.1 --node_thresh_type thresh --edge_threshold 0.01 --edge_thresh_type thresh --aggregation last --example_length 64 --dict_id 10 --data_type hf  --prune_method first-layer-sink --histogram_path ./histograms/NeelNanda_pile-10k_dict10_node0.1_edge0.01_n9990_aggnone_threshTrue_methodig_prunefirst-layer-sink_modelEleutherAI_pythia-70m-deduped.hist"
         },
         {
             "name": "Python Debugger: GPT Circuit",
@@ -18,7 +18,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/circuit.py",
             "console": "integratedTerminal",
-            "args": "--model gpt2 --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 1e-5 --node_thresh_type percentile --edge_threshold 1e-5 --edge_thresh_type percentile --aggregation last --example_length 64 --dict_id gpt2 --data_type hf --prune first-layer-sink --histogram_path ./circuits/gpt2.hist"
+            "args": "--model gpt2 --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 1e-5 --node_thresh_type percentile --edge_threshold 1e-5 --edge_thresh_type percentile --aggregation last --example_length 64 --dict_id gpt2 --data_type hf --prune_method first-layer-sink --histogram_path ./histograms/NeelNanda_pile-10k_dictgpt2_node1.25-sparsity_edge0.02-sparsity_aggnone_methodig_prunefirst-layer-sink_modelgpt2.hist"
         },
         {
             "name": "Python Debugger: GPT Histogram",
@@ -26,7 +26,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/circuit.py",
             "console": "integratedTerminal",
-            "args": "--model gpt2 --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 1.5 --node_thresh_type sparsity --edge_threshold 1.0 --edge_thresh_type sparsity --aggregation none --example_length 64 --dict_id gpt2 --data_type hf --prune first-layer-sink  --collect_hists 100 --accumulate_hists"
+            "args": "--model gpt2 --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 1.25 --node_thresh_type sparsity --edge_threshold 0.02 --edge_thresh_type sparsity --aggregation none --example_length 64 --dict_id gpt2 --data_type hf --prune_method first-layer-sink  --collect_hists 100 --accumulate_hists"
         },
         {
             "name": "Python Debugger: Pythia Histogram",
@@ -34,7 +34,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/circuit.py",
             "console": "integratedTerminal",
-            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.07 --node_thresh_type thresh --edge_threshold 0.1 --edge_thresh_type thresh --aggregation none --example_length 64 --dict_id 10 --data_type hf  --prune first-layer-sink  --collect_hists 100 --accumulate_hists"
+            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 9990 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.07 --node_thresh_type thresh --edge_threshold 0.1 --edge_thresh_type thresh --aggregation none --example_length 64 --dict_id 10 --data_type hf  --prune_method first-layer-sink  --collect_hists 100 --accumulate_hists"
         },
         {
             "name": "Python Debugger: Pythia Prompt",
@@ -42,7 +42,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/circuit.py",
             "console": "integratedTerminal",
-            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 2 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.1 --node_thresh_type thresh --edge_threshold 0.01 --edge_thresh_type thresh --aggregation last --example_length 64 --dict_id 10 --data_type prompt --prompt 'The capital of France is Paris'  --prune first-layer-sink --histogram_path ./circuits/NeelNanda_pile-10k_dict10_node0.1_edge0.01_n9990_aggnone_threshTrue_methodig_prunefirst-layer-sink_modelEleutherAI_pythia-70m-deduped.hist.pt"
+            "args": "--model EleutherAI/pythia-70m-deduped --num_examples 2 --batch_size 1 --dataset NeelNanda/pile-10k --node_threshold 0.1 --node_thresh_type thresh --edge_threshold 0.01 --edge_thresh_type thresh --aggregation last --example_length 64 --dict_id 10 --data_type prompt --prompt 'The capital of France is Paris'  --prune_method first-layer-sink --histogram_path ./histograms/NeelNanda_pile-10k_dict10_node0.1_edge0.01_n9990_aggnone_threshTrue_methodig_prunefirst-layer-sink_modelEleutherAI_pythia-70m-deduped.hist"
         },
     ]
 }

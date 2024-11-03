@@ -1,0 +1,576 @@
+{
+    "settings": {
+        "n_bins": 10000,
+        "act_min": -10,
+        "act_max": 5,
+        "nnz_min": 0,
+        "n_feats": {
+            "mlp_0": 131073,
+            "attn_0": 131073,
+            "resid_0": 32769,
+            "mlp_1": 131073,
+            "attn_1": 131073,
+            "resid_1": 32769,
+            "mlp_2": 131073,
+            "attn_2": 131073,
+            "resid_2": 32769,
+            "mlp_3": 131073,
+            "attn_3": 131073,
+            "resid_3": 32769,
+            "mlp_4": 131073,
+            "attn_4": 131073,
+            "resid_4": 32769,
+            "mlp_5": 131073,
+            "attn_5": 131073,
+            "resid_5": 32769,
+            "mlp_6": 131073,
+            "attn_6": 131073,
+            "resid_6": 32769,
+            "mlp_7": 131073,
+            "attn_7": 131073,
+            "resid_7": 32769,
+            "mlp_8": 131073,
+            "attn_8": 131073,
+            "resid_8": 32769,
+            "mlp_9": 131073,
+            "attn_9": 131073,
+            "resid_9": 32769,
+            "mlp_10": 131073,
+            "attn_10": 131073,
+            "resid_10": 32769,
+            "mlp_11": 131073,
+            "attn_11": 131073,
+            "resid_11": 32769
+        }
+    },
+    "model_str": "gpt2",
+    "cfg": {
+        "node_threshold": 1.25,
+        "edge_threshold": 0.02,
+        "node_thresholds": null,
+        "edge_thresholds": null,
+        "node_thresh_type": "sparsity",
+        "edge_thresh_type": "sparsity",
+        "max_nodes": 50,
+        "nodes_only": false,
+        "method": "ig",
+        "aggregation": "none",
+        "prune_method": "first-layer-sink",
+        "collect_hists": 100,
+        "bootstrap": false,
+        "circuit_dir": "",
+        "plot_dir": "",
+        "bootstrap_path": "",
+        "dataset": "NeelNanda/pile-10k",
+        "num_examples": 9990,
+        "batch_size": 1,
+        "example_length": 64,
+        "data_type": "hf",
+        "edge_thickness_normalization": "linear",
+        "pen_thickness": 0.5,
+        "plot_only": false,
+        "model": "gpt2",
+        "d_model": 768,
+        "resid_posn": "post",
+        "layers": 12,
+        "first_component": "attn_0",
+        "parallel_attn": false,
+        "dict_id": "gpt2",
+        "annotations_path": "",
+        "device": "cuda",
+        "disable_tqdm": false,
+        "seed": null
+    },
+    "mlp_0": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_0"
+        },
+        "resid_0": {
+            "n_samples": 20160,
+            "submod": "mlp_0"
+        }
+    },
+    "attn_0": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_0"
+        },
+        "resid_0": {
+            "n_samples": 20160,
+            "submod": "attn_0"
+        },
+        "mlp_0": {
+            "n_samples": 20160,
+            "submod": "attn_0"
+        }
+    },
+    "resid_0": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_0"
+        },
+        "mlp_1": {
+            "n_samples": 20160,
+            "submod": "resid_0"
+        },
+        "attn_1": {
+            "n_samples": 20160,
+            "submod": "resid_0"
+        },
+        "resid_1": {
+            "n_samples": 20160,
+            "submod": "resid_0"
+        }
+    },
+    "mlp_1": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_1"
+        },
+        "resid_1": {
+            "n_samples": 20160,
+            "submod": "mlp_1"
+        }
+    },
+    "attn_1": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_1"
+        },
+        "resid_1": {
+            "n_samples": 20160,
+            "submod": "attn_1"
+        },
+        "mlp_1": {
+            "n_samples": 20160,
+            "submod": "attn_1"
+        }
+    },
+    "resid_1": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_1"
+        },
+        "mlp_2": {
+            "n_samples": 20160,
+            "submod": "resid_1"
+        },
+        "attn_2": {
+            "n_samples": 20160,
+            "submod": "resid_1"
+        },
+        "resid_2": {
+            "n_samples": 20160,
+            "submod": "resid_1"
+        }
+    },
+    "mlp_2": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_2"
+        },
+        "resid_2": {
+            "n_samples": 20160,
+            "submod": "mlp_2"
+        }
+    },
+    "attn_2": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_2"
+        },
+        "resid_2": {
+            "n_samples": 20160,
+            "submod": "attn_2"
+        },
+        "mlp_2": {
+            "n_samples": 20160,
+            "submod": "attn_2"
+        }
+    },
+    "resid_2": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_2"
+        },
+        "mlp_3": {
+            "n_samples": 20160,
+            "submod": "resid_2"
+        },
+        "attn_3": {
+            "n_samples": 20160,
+            "submod": "resid_2"
+        },
+        "resid_3": {
+            "n_samples": 20160,
+            "submod": "resid_2"
+        }
+    },
+    "mlp_3": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_3"
+        },
+        "resid_3": {
+            "n_samples": 20160,
+            "submod": "mlp_3"
+        }
+    },
+    "attn_3": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_3"
+        },
+        "resid_3": {
+            "n_samples": 20160,
+            "submod": "attn_3"
+        },
+        "mlp_3": {
+            "n_samples": 20160,
+            "submod": "attn_3"
+        }
+    },
+    "resid_3": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_3"
+        },
+        "mlp_4": {
+            "n_samples": 20160,
+            "submod": "resid_3"
+        },
+        "attn_4": {
+            "n_samples": 20160,
+            "submod": "resid_3"
+        },
+        "resid_4": {
+            "n_samples": 20160,
+            "submod": "resid_3"
+        }
+    },
+    "mlp_4": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_4"
+        },
+        "resid_4": {
+            "n_samples": 20160,
+            "submod": "mlp_4"
+        }
+    },
+    "attn_4": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_4"
+        },
+        "resid_4": {
+            "n_samples": 20160,
+            "submod": "attn_4"
+        },
+        "mlp_4": {
+            "n_samples": 20160,
+            "submod": "attn_4"
+        }
+    },
+    "resid_4": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_4"
+        },
+        "mlp_5": {
+            "n_samples": 20160,
+            "submod": "resid_4"
+        },
+        "attn_5": {
+            "n_samples": 20160,
+            "submod": "resid_4"
+        },
+        "resid_5": {
+            "n_samples": 20160,
+            "submod": "resid_4"
+        }
+    },
+    "mlp_5": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_5"
+        },
+        "resid_5": {
+            "n_samples": 20160,
+            "submod": "mlp_5"
+        }
+    },
+    "attn_5": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_5"
+        },
+        "resid_5": {
+            "n_samples": 20160,
+            "submod": "attn_5"
+        },
+        "mlp_5": {
+            "n_samples": 20160,
+            "submod": "attn_5"
+        }
+    },
+    "resid_5": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_5"
+        },
+        "mlp_6": {
+            "n_samples": 20160,
+            "submod": "resid_5"
+        },
+        "attn_6": {
+            "n_samples": 20160,
+            "submod": "resid_5"
+        },
+        "resid_6": {
+            "n_samples": 20160,
+            "submod": "resid_5"
+        }
+    },
+    "mlp_6": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_6"
+        },
+        "resid_6": {
+            "n_samples": 20160,
+            "submod": "mlp_6"
+        }
+    },
+    "attn_6": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_6"
+        },
+        "resid_6": {
+            "n_samples": 20160,
+            "submod": "attn_6"
+        },
+        "mlp_6": {
+            "n_samples": 20160,
+            "submod": "attn_6"
+        }
+    },
+    "resid_6": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_6"
+        },
+        "mlp_7": {
+            "n_samples": 20160,
+            "submod": "resid_6"
+        },
+        "attn_7": {
+            "n_samples": 20160,
+            "submod": "resid_6"
+        },
+        "resid_7": {
+            "n_samples": 20160,
+            "submod": "resid_6"
+        }
+    },
+    "mlp_7": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_7"
+        },
+        "resid_7": {
+            "n_samples": 20160,
+            "submod": "mlp_7"
+        }
+    },
+    "attn_7": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_7"
+        },
+        "resid_7": {
+            "n_samples": 20160,
+            "submod": "attn_7"
+        },
+        "mlp_7": {
+            "n_samples": 20160,
+            "submod": "attn_7"
+        }
+    },
+    "resid_7": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_7"
+        },
+        "mlp_8": {
+            "n_samples": 20160,
+            "submod": "resid_7"
+        },
+        "attn_8": {
+            "n_samples": 20160,
+            "submod": "resid_7"
+        },
+        "resid_8": {
+            "n_samples": 20160,
+            "submod": "resid_7"
+        }
+    },
+    "mlp_8": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_8"
+        },
+        "resid_8": {
+            "n_samples": 20160,
+            "submod": "mlp_8"
+        }
+    },
+    "attn_8": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_8"
+        },
+        "resid_8": {
+            "n_samples": 20160,
+            "submod": "attn_8"
+        },
+        "mlp_8": {
+            "n_samples": 20160,
+            "submod": "attn_8"
+        }
+    },
+    "resid_8": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_8"
+        },
+        "mlp_9": {
+            "n_samples": 20160,
+            "submod": "resid_8"
+        },
+        "attn_9": {
+            "n_samples": 20160,
+            "submod": "resid_8"
+        },
+        "resid_9": {
+            "n_samples": 20160,
+            "submod": "resid_8"
+        }
+    },
+    "mlp_9": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_9"
+        },
+        "resid_9": {
+            "n_samples": 20160,
+            "submod": "mlp_9"
+        }
+    },
+    "attn_9": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_9"
+        },
+        "resid_9": {
+            "n_samples": 20160,
+            "submod": "attn_9"
+        },
+        "mlp_9": {
+            "n_samples": 20160,
+            "submod": "attn_9"
+        }
+    },
+    "resid_9": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_9"
+        },
+        "mlp_10": {
+            "n_samples": 20160,
+            "submod": "resid_9"
+        },
+        "attn_10": {
+            "n_samples": 20160,
+            "submod": "resid_9"
+        },
+        "resid_10": {
+            "n_samples": 20160,
+            "submod": "resid_9"
+        }
+    },
+    "mlp_10": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_10"
+        },
+        "resid_10": {
+            "n_samples": 20160,
+            "submod": "mlp_10"
+        }
+    },
+    "attn_10": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_10"
+        },
+        "resid_10": {
+            "n_samples": 20160,
+            "submod": "attn_10"
+        },
+        "mlp_10": {
+            "n_samples": 20160,
+            "submod": "attn_10"
+        }
+    },
+    "resid_10": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_10"
+        },
+        "mlp_11": {
+            "n_samples": 20160,
+            "submod": "resid_10"
+        },
+        "attn_11": {
+            "n_samples": 20160,
+            "submod": "resid_10"
+        },
+        "resid_11": {
+            "n_samples": 20160,
+            "submod": "resid_10"
+        }
+    },
+    "mlp_11": {
+        "node": {
+            "n_samples": 252,
+            "submod": "mlp_11"
+        },
+        "resid_11": {
+            "n_samples": 20160,
+            "submod": "mlp_11"
+        }
+    },
+    "attn_11": {
+        "node": {
+            "n_samples": 252,
+            "submod": "attn_11"
+        },
+        "resid_11": {
+            "n_samples": 20160,
+            "submod": "attn_11"
+        },
+        "mlp_11": {
+            "n_samples": 20160,
+            "submod": "attn_11"
+        }
+    },
+    "resid_11": {
+        "node": {
+            "n_samples": 252,
+            "submod": "resid_11"
+        }
+    }
+}
