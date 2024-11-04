@@ -89,7 +89,7 @@ def load_hists(args, cfg, save_basename):
     hist_agg = HistAggregator(cfg.model)
 
     needs_hist = cfg.node_thresh_type in NEEDS_HIST or cfg.edge_thresh_type in NEEDS_HIST
-    default_hist_path = f'histograms/{save_basename}_{cfg.as_fname()}.hist'
+    default_hist_path = f'histograms/{save_basename}_{cfg.as_fname()}'
     hist_path = args.histogram_path if args.histogram_path else default_hist_path
 
     if args.accumulate_hists or needs_hist or args.bootstrap_path:

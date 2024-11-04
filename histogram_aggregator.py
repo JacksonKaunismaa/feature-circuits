@@ -394,25 +394,7 @@ class HistAggregator:
                 tensor_state[k] = f.get_tensor(k)
         return Histogram(submod, self.settings).load_state_dict(pyth_state, tensor_state)
 
-    def load(self, path_or_dict, map_location=None):
-        if isinstance(path_or_dict, str):
-            if os.path.exists(path_or_dict):
-                data = t.load(path_or_dict, map_location=map_location)
-            else:
-                warnings.warn(f'Tried to load histogram, but file "{path_or_dict}" was not found...')
-                return None
-        else:
-            data = path_or_dict
-        self.nodes = data['nodes']
-        self.edges = data['edges']
-        self.model_str = data['model_str']
-        self.settings = data['settings']
-        self.n_samples = data['n_samples']
-        if isinstance(path_or_dict, str):
-            print("Successfully loaded histograms at", path_or_dict)
-        return self
-
-    def new_load(self, path, map_location=None):
+    def load(self, path, map_location=None):
         if not osp.exists(path):
             warnings.warn(f'Tried to load histograms, but path "{path}" was not found...')
             return None

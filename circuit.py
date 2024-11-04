@@ -444,7 +444,7 @@ def main():
 
             process_examples(model, embed, attns, mlps, resids, dictionaries, example_basename, example, cfg, hist_agg)
             if cfg.collect_hists > 0:
-                hist_agg.save(hist_path)
+                hist_agg.save(hist_path, cfg)
                 if i >= cfg.collect_hists:
                     break
     else:
