@@ -6,6 +6,9 @@ import torch as t
 import torch.nn.functional as F
 from dictionary_learning.dictionary import AutoEncoder
 from dataclasses import dataclass
+from datasets import load_dataset
+from tqdm import tqdm
+
 
 @dataclass
 class DictionaryCfg():
@@ -18,11 +21,9 @@ class DictionaryCfg():
         self.size = dictionary_size
 
 
-def load_examples(dataset, num_examples, model, seed=12, pad_to_length=None, length=None):
+def load_examples(dataset, num_examples, model, pad_to_length=None, length=None):
     examples = []
     dataset_items = open(dataset).readlines()
-    random.seed(seed)
-    random.shuffle(dataset_items)
     for line in dataset_items:
         data = json.loads(line)
         clean_prefix = model.tokenizer(data["clean_prefix"], return_tensors="pt",
@@ -52,7 +53,7 @@ def load_examples(dataset, num_examples, model, seed=12, pad_to_length=None, len
             # left padding: reverse, right-pad, reverse
             clean_prefix = t.flip(F.pad(t.flip(clean_prefix, (1,)), (0, pad_length), value=model.tokenizer.pad_token_id), (1,))
             patch_prefix = t.flip(F.pad(t.flip(patch_prefix, (1,)), (0, pad_length), value=model.tokenizer.pad_token_id), (1,))
-        
+
         example_dict = {"clean_prefix": clean_prefix,
                         "patch_prefix": patch_prefix,
                         "clean_answer": clean_answer.item(),
@@ -74,7 +75,7 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
         pass
     else:
         raise ValueError(f"`dataset` is unrecognized type: {type(dataset)}. Must be path (str) or dict")
-    
+
     max_len = 0     # for padding
     for context_id in dataset:
         context = dataset[context_id]["context"]
@@ -100,12 +101,50 @@ def load_examples_nopair(dataset, num_examples, model, length=None):
 
         example_dict = {"clean_prefix": clean_prefix,
                         "clean_answer": clean_answer.item(),
-                        "prefix_length_wo_pad": prefix_length_wo_pad,}
+                        "prefix_length_wo_pad": prefix_length_wo_pad,
+                        'document_idx': dataset[context_id]['document_idx'],}
         examples.append(example_dict)
         if len(examples) >= num_examples:
             break
 
     return examples
+
+
+
+def load_examples_hf(dataset, num_examples, model, length=None) -> list[dict]:
+    ds = load_dataset(dataset)
+    text = ds["train"]["text"]
+    examples = []
+    for i, sent in tqdm(enumerate(text)):
+        tokenized = model.tokenizer(sent, return_length=True,
+                                    padding=False, return_tensors='pt')#['input_ids']
+        context = tokenized['input_ids']
+        if length is not None and tokenized['length'][0] < length+1:
+            continue
+        if length is not None and tokenized['length'][0] > length+1:
+            context = context[:, -(length+1):]
+        context, answer = context[:, :-1], context[:, -1]
+        example_dict = {"clean_prefix": context,
+                        "clean_answer": answer,
+                        "prefix_length_wo_pad": context.shape[-1],
+                        'document_idx': i}
+        # nede to wrap it in a list, as circuit code expects a list
+        examples.append([example_dict])
+        if len(examples) >= num_examples:
+            break
+    return examples
+
+def load_examples_prompt(prompt: str, model) -> list[dict]:
+    tokenized = model.tokenizer(prompt, return_length=True,
+                                padding=False, return_tensors='pt')
+    context = tokenized['input_ids']
+    context, answer = context[:, :-1], context[:, -1]
+    example_dict = {"clean_prefix": context,
+                    "clean_answer": answer,
+                    "prefix_length_wo_pad": context.shape[-1],
+                    'document_idx': -1}
+    return [example_dict]
+
 
 def get_annotation(dataset, model, data):
     # First, understand which dataset we're working with
@@ -125,7 +164,7 @@ def get_annotation(dataset, model, data):
 
     if structure is None:
         return {}
-    
+
     annotations = {}
 
     # Iterate through words in the template and input. Get token spans
@@ -138,5 +177,25 @@ def get_annotation(dataset, model, data):
         span = (curr_token, curr_token + num_tokens-1)
         curr_token += num_tokens
         annotations[template_word] = span
-    
+
     return annotations
+
+
+def get_examples(args, model):
+    if args.data_type == 'nopair':
+        save_basename = os.path.splitext(os.path.basename(args.dataset))[0]
+        examples = load_examples_nopair(args.dataset, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'regular':
+        data_path = f"data/{args.dataset}.json"
+        save_basename = args.dataset
+        if args.aggregation == "sum":
+            examples = load_examples(data_path, args.num_examples, model, pad_to_length=args.example_length)
+        else:
+            examples = load_examples(data_path, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'hf':
+        save_basename = args.dataset.replace('/', '_')
+        examples = load_examples_hf(args.dataset, args.num_examples, model, length=args.example_length)
+    elif args.data_type == 'prompt':
+        save_basename = 'prompt'
+        examples = load_examples_prompt(args.prompt, model)
+    return save_basename, examples

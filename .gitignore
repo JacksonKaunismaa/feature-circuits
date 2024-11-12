@@ -164,3 +164,8 @@ phenomena/vocab/*.json
 phenomena/circuits/*
 circuits/*
 nohup.out
+**/*.pkl
+**/*.pt
+data/*
+dictionaries
+

@@ -1,0 +1,301 @@
+{
+    "settings": {
+        "n_bins": 10000,
+        "act_min": -10,
+        "act_max": 5,
+        "nnz_min": 0,
+        "n_feats": {
+            "embed": 32769,
+            "mlp_0": 32769,
+            "attn_0": 32769,
+            "resid_0": 32769,
+            "mlp_1": 32769,
+            "attn_1": 32769,
+            "resid_1": 32769,
+            "mlp_2": 32769,
+            "attn_2": 32769,
+            "resid_2": 32769,
+            "mlp_3": 32769,
+            "attn_3": 32769,
+            "resid_3": 32769,
+            "mlp_4": 32769,
+            "attn_4": 32769,
+            "resid_4": 32769,
+            "mlp_5": 32769,
+            "attn_5": 32769,
+            "resid_5": 32769
+        }
+    },
+    "model_str": "EleutherAI/pythia-70m-deduped",
+    "cfg": {
+        "node_threshold": 0.11,
+        "edge_threshold": 0.1,
+        "node_thresholds": null,
+        "edge_thresholds": null,
+        "node_thresh_type": "thresh",
+        "edge_thresh_type": "thresh",
+        "max_nodes": 50,
+        "nodes_only": false,
+        "method": "ig",
+        "aggregation": "none",
+        "prune_method": "first-layer-sink",
+        "collect_hists": 300,
+        "bootstrap": false,
+        "circuit_dir": "circuits/",
+        "plot_dir": "circuits/figures/",
+        "bootstrap_path": null,
+        "dataset": "NeelNanda/pile-10k",
+        "num_examples": 9990,
+        "batch_size": 1,
+        "example_length": 32,
+        "data_type": "hf",
+        "edge_thickness_normalization": "log",
+        "pen_thickness": 0.5,
+        "plot_only": false,
+        "model": "EleutherAI/pythia-70m-deduped",
+        "d_model": 512,
+        "resid_posn": "post",
+        "layers": 6,
+        "first_component": "embed",
+        "parallel_attn": true,
+        "dict_id": "10",
+        "annotations_path": "",
+        "device": "cuda:0",
+        "disable_tqdm": false,
+        "seed": null
+    },
+    "embed": {
+        "node": {
+            "n_samples": 301,
+            "submod": "embed"
+        },
+        "mlp_0": {
+            "n_samples": 4260,
+            "submod": "embed"
+        },
+        "attn_0": {
+            "n_samples": 3364,
+            "submod": "embed"
+        },
+        "resid_0": {
+            "n_samples": 7898,
+            "submod": "embed"
+        }
+    },
+    "mlp_0": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_0"
+        },
+        "resid_0": {
+            "n_samples": 7898,
+            "submod": "mlp_0"
+        }
+    },
+    "attn_0": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_0"
+        },
+        "resid_0": {
+            "n_samples": 7898,
+            "submod": "attn_0"
+        }
+    },
+    "resid_0": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_0"
+        },
+        "mlp_1": {
+            "n_samples": 1754,
+            "submod": "resid_0"
+        },
+        "attn_1": {
+            "n_samples": 916,
+            "submod": "resid_0"
+        },
+        "resid_1": {
+            "n_samples": 5597,
+            "submod": "resid_0"
+        }
+    },
+    "mlp_1": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_1"
+        },
+        "resid_1": {
+            "n_samples": 5597,
+            "submod": "mlp_1"
+        }
+    },
+    "attn_1": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_1"
+        },
+        "resid_1": {
+            "n_samples": 5597,
+            "submod": "attn_1"
+        }
+    },
+    "resid_1": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_1"
+        },
+        "mlp_2": {
+            "n_samples": 1401,
+            "submod": "resid_1"
+        },
+        "attn_2": {
+            "n_samples": 793,
+            "submod": "resid_1"
+        },
+        "resid_2": {
+            "n_samples": 3925,
+            "submod": "resid_1"
+        }
+    },
+    "mlp_2": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_2"
+        },
+        "resid_2": {
+            "n_samples": 3925,
+            "submod": "mlp_2"
+        }
+    },
+    "attn_2": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_2"
+        },
+        "resid_2": {
+            "n_samples": 3925,
+            "submod": "attn_2"
+        }
+    },
+    "resid_2": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_2"
+        },
+        "mlp_3": {
+            "n_samples": 811,
+            "submod": "resid_2"
+        },
+        "attn_3": {
+            "n_samples": 678,
+            "submod": "resid_2"
+        },
+        "resid_3": {
+            "n_samples": 3275,
+            "submod": "resid_2"
+        }
+    },
+    "mlp_3": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_3"
+        },
+        "resid_3": {
+            "n_samples": 3275,
+            "submod": "mlp_3"
+        }
+    },
+    "attn_3": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_3"
+        },
+        "resid_3": {
+            "n_samples": 3275,
+            "submod": "attn_3"
+        }
+    },
+    "resid_3": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_3"
+        },
+        "mlp_4": {
+            "n_samples": 864,
+            "submod": "resid_3"
+        },
+        "resid_4": {
+            "n_samples": 2947,
+            "submod": "resid_3"
+        },
+        "attn_4": {
+            "n_samples": 157,
+            "submod": "resid_3"
+        }
+    },
+    "mlp_4": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_4"
+        },
+        "resid_4": {
+            "n_samples": 2947,
+            "submod": "mlp_4"
+        }
+    },
+    "attn_4": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_4"
+        },
+        "resid_4": {
+            "n_samples": 2947,
+            "submod": "attn_4"
+        }
+    },
+    "resid_4": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_4"
+        },
+        "mlp_5": {
+            "n_samples": 824,
+            "submod": "resid_4"
+        },
+        "attn_5": {
+            "n_samples": 264,
+            "submod": "resid_4"
+        },
+        "resid_5": {
+            "n_samples": 2388,
+            "submod": "resid_4"
+        }
+    },
+    "mlp_5": {
+        "node": {
+            "n_samples": 301,
+            "submod": "mlp_5"
+        },
+        "resid_5": {
+            "n_samples": 2388,
+            "submod": "mlp_5"
+        }
+    },
+    "attn_5": {
+        "node": {
+            "n_samples": 301,
+            "submod": "attn_5"
+        },
+        "resid_5": {
+            "n_samples": 2388,
+            "submod": "attn_5"
+        }
+    },
+    "resid_5": {
+        "node": {
+            "n_samples": 301,
+            "submod": "resid_5"
+        }
+    }
+}
